@@ -228,80 +228,56 @@ const GameState = struct {
     }
 
     fn getPawnMoves(self: *GameState, row: usize, col: usize) void {
-        const isWhite = self.board[row][col].?.color == Color.White;
+        const isWhite = self.turn == Color.White;
+        const row_offset: i8 = if (isWhite) 1 else -1;
+        var r: i8 = @intCast(row);
+        const c: i8 = @intCast(col);
+        r += row_offset;
 
-        if (isWhite) {
-            if (self.board[row + 1][col - 1]) |piece| {
-                if (piece.color == self.turn) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ @intCast(row + 1), @intCast(col - 1) },
-                    .move_type = .Capture,
-                };
-                self.allLegalMoveCount += 1;
+        const start_row: u8 = if (isWhite) 1 else 6;
+
+        if (!isInBounds(r, c)) return;
+
+        if (isInBounds(r, c - 1)) {
+            if (self.board[@intCast(r)][col - 1]) |piece| {
+                if (piece.color != self.turn) {
+                    self.allLegalMoves[self.allLegalMoveCount] = Move{
+                        .from = .{ @intCast(row), @intCast(col) },
+                        .to = .{ @intCast(r), @intCast(col - 1) },
+                        .move_type = .Capture,
+                    };
+                    self.allLegalMoveCount += 1;
+                }
             }
+        }
 
-            if (self.board[row + 1][col + 1]) |piece| {
-                if (piece.color == self.turn) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ @intCast(row + 1), @intCast(col - 1) },
-                    .move_type = .Capture,
-                };
-                self.allLegalMoveCount += 1;
+        if (isInBounds(r, c + 1)) {
+            if (self.board[@intCast(r)][col + 1]) |piece| {
+                if (piece.color != self.turn) {
+                    self.allLegalMoves[self.allLegalMoveCount] = Move{
+                        .from = .{ @intCast(row), @intCast(col) },
+                        .to = .{ @intCast(r), @intCast(col + 1) },
+                        .move_type = .Capture,
+                    };
+                    self.allLegalMoveCount += 1;
+                }
             }
+        }
 
-            if (self.board[row + 1][col] != null) return;
+        if (self.board[@intCast(r)][col] != null) return;
+        self.allLegalMoves[self.allLegalMoveCount] = Move{
+            .from = .{ @intCast(row), @intCast(col) },
+            .to = .{ @intCast(r), @intCast(col) },
+            .move_type = .Normal,
+        };
+        self.allLegalMoveCount += 1;
+        if (row == start_row and self.board[@intCast(r + row_offset)][col] == null) {
             self.allLegalMoves[self.allLegalMoveCount] = Move{
                 .from = .{ @intCast(row), @intCast(col) },
-                .to = .{ @intCast(row + 1), @intCast(col) },
+                .to = .{ @intCast(r + row_offset), @intCast(col) },
                 .move_type = .Normal,
             };
             self.allLegalMoveCount += 1;
-            if (row == 1 and self.board[row + 2][col] == null) {
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ @intCast(row + 2), @intCast(col) },
-                    .move_type = .Normal,
-                };
-                self.allLegalMoveCount += 1;
-            }
-        } else {
-            if (self.board[row - 1][col - 1]) |piece| {
-                if (piece.color == self.turn) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ @intCast(row + 1), @intCast(col - 1) },
-                    .move_type = .Capture,
-                };
-                self.allLegalMoveCount += 1;
-            }
-
-            if (self.board[row - 1][col + 1]) |piece| {
-                if (piece.color == self.turn) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ @intCast(row + 1), @intCast(col - 1) },
-                    .move_type = .Capture,
-                };
-                self.allLegalMoveCount += 1;
-            }
-
-            if (self.board[row - 1][col] != null) return;
-            self.allLegalMoves[self.allLegalMoveCount] = Move{
-                .from = .{ @intCast(row), @intCast(col) },
-                .to = .{ @intCast(row - 1), @intCast(col) },
-                .move_type = .Normal,
-            };
-            self.allLegalMoveCount += 1;
-            if (row == 6 and self.board[row - 2][col] == null) {
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ @intCast(row - 2), @intCast(col) },
-                    .move_type = .Normal,
-                };
-                self.allLegalMoveCount += 1;
-            }
         }
     }
 
