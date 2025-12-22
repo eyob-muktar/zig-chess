@@ -125,7 +125,7 @@ const GameState = struct {
             .allocator = allocator,
             .board = buildInitialBoard(),
             .selectedSquare = null,
-            .turn = Color.Black,
+            .turn = Color.White,
             .moveInProgress = false,
             .allLegalMoves = [_]Move{undefined} ** 218,
             .allLegalMoveCount = 0,
@@ -155,6 +155,17 @@ const GameState = struct {
             target = self.board[move.from[0]][move.to[1]];
             self.board[move.from[0]][move.to[1]] = null;
         }
+        if (move.move_type == .Castling) {
+            if (move.to[1] == 6) {
+                // king side castling
+                self.board[move.to[0]][5] = self.board[move.to[0]][7];
+                self.board[move.to[0]][7] = null;
+            } else if (move.to[1] == 2) {
+                // queen side castling
+                self.board[move.to[0]][3] = self.board[move.to[0]][0];
+                self.board[move.to[0]][0] = null;
+            }
+        }
         self.board[move.to[0]][move.to[1]] = self.board[move.from[0]][move.from[1]];
         self.board[move.from[0]][move.from[1]] = null;
 
@@ -173,6 +184,7 @@ const GameState = struct {
         }
 
         try self.history.append(self.allocator, history_entry);
+        self.updateCastlingRights(move);
         return history_entry;
     }
 
@@ -183,6 +195,17 @@ const GameState = struct {
             if (move.move_type == .EnPassant) {
                 self.board[move.to[0]][move.to[1]] = null;
                 self.board[move.from[0]][move.to[1]] = entry.captured_piece;
+            } else if (move.move_type == .Castling) {
+                self.board[move.to[0]][move.to[1]] = null;
+                if (move.to[1] == 6) {
+                    // king side castling
+                    self.board[move.to[0]][7] = self.board[move.to[0]][5];
+                    self.board[move.to[0]][5] = null;
+                } else if (move.to[1] == 2) {
+                    // queen side castling
+                    self.board[move.to[0]][0] = self.board[move.to[0]][3];
+                    self.board[move.to[0]][3] = null;
+                }
             } else {
                 self.board[move.to[0]][move.to[1]] = entry.captured_piece;
             }
@@ -254,6 +277,44 @@ const GameState = struct {
         unreachable;
     }
 
+    fn updateCastlingRights(self: *GameState, move: Move) void {
+        const piece = self.board[move.to[0]][move.to[1]];
+        if (piece) |p| {
+            if (p.type == .King) {
+                if (self.turn == Color.White) {
+                    self.castlingRights.white_king_side = false;
+                    self.castlingRights.white_queen_side = false;
+                } else {
+                    self.castlingRights.black_king_side = false;
+                    self.castlingRights.black_queen_side = false;
+                }
+            }
+
+            if (p.type == .Rook) {
+                const col = move.from[1];
+                if (col == 0) {
+                    if (self.turn == .White) {
+                        self.castlingRights.white_queen_side = false;
+                    } else {
+                        self.castlingRights.black_queen_side = false;
+                    }
+                } else if (col == 7) {
+                    if (self.turn == .White) {
+                        self.castlingRights.white_king_side = false;
+                    } else {
+                        self.castlingRights.black_king_side = false;
+                    }
+                }
+            }
+        }
+    }
+
+    fn canKingCastle(self: GameState) bool {
+        if (self.turn == .White) {
+            if (self.castlingRights.white_king_side) {}
+        }
+    }
+
     fn getKingMoves(self: *GameState, row: usize, col: usize) void {
         for (king_dirs) |dir| {
             var r: i8 = @intCast(row);
@@ -275,6 +336,42 @@ const GameState = struct {
                     .from = .{ @intCast(row), @intCast(col) },
                     .to = .{ @intCast(r), @intCast(c) },
                     .move_type = .Normal,
+                };
+                self.allLegalMoveCount += 1;
+            }
+        }
+
+        if (self.turn == .White) {
+            if (self.castlingRights.white_king_side and self.board[0][5] == null and self.board[0][6] == null) {
+                self.allLegalMoves[self.allLegalMoveCount] = Move{
+                    .from = .{ @intCast(row), @intCast(col) },
+                    .to = .{ 0, 6 },
+                    .move_type = .Castling,
+                };
+                self.allLegalMoveCount += 1;
+            }
+            if (self.castlingRights.white_queen_side and self.board[0][1] == null and self.board[0][2] == null and self.board[0][3] == null) {
+                self.allLegalMoves[self.allLegalMoveCount] = Move{
+                    .from = .{ @intCast(row), @intCast(col) },
+                    .to = .{ 0, 2 },
+                    .move_type = .Castling,
+                };
+                self.allLegalMoveCount += 1;
+            }
+        } else {
+            if (self.castlingRights.black_king_side and self.board[7][5] == null and self.board[7][6] == null) {
+                self.allLegalMoves[self.allLegalMoveCount] = Move{
+                    .from = .{ @intCast(row), @intCast(col) },
+                    .to = .{ 7, 6 },
+                    .move_type = .Castling,
+                };
+                self.allLegalMoveCount += 1;
+            }
+            if (self.castlingRights.black_queen_side and self.board[7][1] == null and self.board[7][2] == null and self.board[7][3] == null) {
+                self.allLegalMoves[self.allLegalMoveCount] = Move{
+                    .from = .{ @intCast(row), @intCast(col) },
+                    .to = .{ 7, 2 },
+                    .move_type = .Castling,
                 };
                 self.allLegalMoveCount += 1;
             }
@@ -406,15 +503,6 @@ const GameState = struct {
         if (self.board[row][col] == null or row > 7 or col > 7) return;
         if (self.turn != self.board[row][col].?.color) return;
         self.selectedSquare = .{ @intCast(row), @intCast(col) };
-    }
-
-    fn movePiece(self: *GameState, src_row: usize, src_col: usize, dst_row: usize, dst_col: usize) void {
-        if (src_row == dst_row and src_col == dst_col) return;
-        if (self.board[dst_row][dst_col] != null) return;
-        if (self.board[src_row][src_col]) |piece| {
-            self.board[dst_row][dst_col] = piece;
-            self.board[src_row][src_col] = null;
-        }
     }
 
     fn isSquareAttacked(self: *GameState, target_square: [2]u8, attacker_color: Color) bool {
