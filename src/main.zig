@@ -40,7 +40,7 @@ const HistoryEntry = struct {
     move: Move,
     captured_piece: ?Piece,
     old_castling_rights: CastlingRights,
-    old_en_passant_pos: ?Vec2, // Was there an EP target before this move?
+    old_en_passant_pos: ?[2]u8, // Was there an EP target before this move?
     half_move_clock: u32, // For the 50-move rule
 };
 
@@ -110,14 +110,15 @@ fn buildInitialBoard() [8][8]?Piece {
 // Define the state for the game
 const GameState = struct {
     board: [8][8]?Piece,
-    selectedSquare: ?[2]u8, // Optional, store [row, col] for selected square (null means no selection)
-    turn: Color, // White or Black turn
-    moveInProgress: bool, // Whether a move is in progress
+    selectedSquare: ?[2]u8,
+    turn: Color,
+    moveInProgress: bool,
     allLegalMoves: [218]Move,
     allLegalMoveCount: u8,
     castlingRights: CastlingRights,
     allocator: std.mem.Allocator,
     history: std.ArrayList(HistoryEntry),
+    en_passant_pos: ?[2]u8,
 
     fn init(allocator: std.mem.Allocator) !GameState {
         var game_state = GameState{
@@ -130,8 +131,9 @@ const GameState = struct {
             .allLegalMoveCount = 0,
             .history = try std.ArrayList(HistoryEntry).initCapacity(allocator, 100),
             .castlingRights = CastlingRights{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true },
+            .en_passant_pos = null,
         };
-        game_state.calculateAllLegalMoves();
+        try game_state.calculateAllLegalMoves();
         return game_state;
     }
 
@@ -140,27 +142,57 @@ const GameState = struct {
         self.allocator.destroy(self.history);
     }
 
-    fn switchTurn(self: *GameState) void {
+    fn switchTurn(self: *GameState) !void {
         self.turn = if (self.turn == Color.White) Color.Black else Color.White;
         self.moveInProgress = false;
         self.selectedSquare = null;
-        self.calculateAllLegalMoves();
-        self.filterAllLegalMoves();
+        try self.calculateAllLegalMoves();
     }
 
-    fn applyMove(self: *GameState, move: Move) ?Piece {
-        const target = self.board[move.to[0]][move.to[1]];
+    fn applyMove(self: *GameState, move: Move) !HistoryEntry {
+        var target = self.board[move.to[0]][move.to[1]];
+        if (move.move_type == .EnPassant) {
+            target = self.board[move.from[0]][move.to[1]];
+            self.board[move.from[0]][move.to[1]] = null;
+        }
         self.board[move.to[0]][move.to[1]] = self.board[move.from[0]][move.from[1]];
         self.board[move.from[0]][move.from[1]] = null;
-        return target;
+
+        const history_entry = HistoryEntry{
+            .move = move,
+            .captured_piece = target,
+            .old_castling_rights = self.castlingRights,
+            .half_move_clock = 0,
+            .old_en_passant_pos = self.en_passant_pos,
+        };
+
+        if (move.move_type == .DoublePawnPush) {
+            self.en_passant_pos = if (self.turn == Color.White) .{ move.to[0] - 1, move.to[1] } else .{ move.to[0] + 1, move.to[1] };
+        } else {
+            self.en_passant_pos = null;
+        }
+
+        try self.history.append(self.allocator, history_entry);
+        return history_entry;
     }
 
-    fn undoMove(self: *GameState, move: Move, original_target: ?Piece) void {
-        self.board[move.from[0]][move.from[1]] = self.board[move.to[0]][move.to[1]];
-        self.board[move.to[0]][move.to[1]] = original_target;
+    fn undoMove(self: *GameState, move: Move) !void {
+        const history_entry = self.history.pop();
+        if (history_entry) |entry| {
+            self.board[move.from[0]][move.from[1]] = self.board[move.to[0]][move.to[1]];
+            if (move.move_type == .EnPassant) {
+                self.board[move.to[0]][move.to[1]] = null;
+                self.board[move.from[0]][move.to[1]] = entry.captured_piece;
+            } else {
+                self.board[move.to[0]][move.to[1]] = entry.captured_piece;
+            }
+
+            self.castlingRights = entry.old_castling_rights;
+            self.en_passant_pos = entry.old_en_passant_pos;
+        }
     }
 
-    fn calculateAllLegalMoves(self: *GameState) void {
+    fn calculateAllLegalMoves(self: *GameState) !void {
         self.allLegalMoveCount = 0;
         self.allLegalMoves = [_]Move{undefined} ** 218;
         for (self.board, 0..) |row, row_idx| {
@@ -179,28 +211,15 @@ const GameState = struct {
             }
         }
 
-        self.filterAllLegalMoves();
-
-        // check if king is safe
-        // for (self.allLegalMoves[0..self.allLegalMoveCount]) |move| {
-        //     if (move.move_type == .Capture) {
-        //         if (self.board[@intCast(move.to[0])][@intCast(move.to[1])] == null) {
-        //             self.allLegalMoves[self.allLegalMoveCount] = move;
-        //             self.allLegalMoveCount += 1;
-        //         }
-        //     } else {
-        //         self.allLegalMoves[self.allLegalMoveCount] = move;
-        //         self.allLegalMoveCount += 1;
-        //     }
-        // }
+        try self.filterAllLegalMoves();
     }
 
-    fn filterAllLegalMoves(self: *GameState) void {
+    fn filterAllLegalMoves(self: *GameState) !void {
         const king_pos = self.findKing(self.turn);
         var idx: usize = 0;
         while (idx < self.allLegalMoveCount) {
             const move = self.allLegalMoves[idx];
-            const original_target = self.applyMove(move);
+            _ = try self.applyMove(move);
             const attacker_color = if (self.turn == Color.White) Color.Black else Color.White;
             var target = king_pos;
 
@@ -215,7 +234,7 @@ const GameState = struct {
             } else {
                 idx += 1;
             }
-            self.undoMove(move, original_target);
+            try self.undoMove(move);
         }
     }
 
@@ -272,6 +291,18 @@ const GameState = struct {
         const start_row: u8 = if (isWhite) 1 else 6;
 
         if (!isInBounds(r, c)) return;
+
+        // En Passant
+        if (self.en_passant_pos) |ep| {
+            if (ep[0] == r and (ep[1] == c - 1 or ep[1] == c + 1)) {
+                self.allLegalMoves[self.allLegalMoveCount] = Move{
+                    .from = .{ @intCast(row), @intCast(col) },
+                    .to = .{ ep[0], ep[1] },
+                    .move_type = .EnPassant,
+                };
+                self.allLegalMoveCount += 1;
+            }
+        }
 
         if (isInBounds(r, c - 1)) {
             if (self.board[@intCast(r)][col - 1]) |piece| {
@@ -488,7 +519,7 @@ pub fn main() !void {
         drawBoard(game_state, assets);
 
         if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
-            handleMousePressed(&game_state);
+            try handleMousePressed(&game_state);
         }
     }
 }
@@ -500,12 +531,12 @@ fn getMouseBoardPosition() [2]u8 {
     return .{ @intCast(row), @intCast(col) };
 }
 
-fn handleMousePressed(state: *GameState) void {
+fn handleMousePressed(state: *GameState) !void {
     const mouse_pos = getMouseBoardPosition();
     const row = mouse_pos[0];
     const col = mouse_pos[1];
     if (state.selectedSquare) |sel| {
-        handleMoveAttempt(state, @intCast(row), @intCast(col), sel);
+        try handleMoveAttempt(state, @intCast(row), @intCast(col), sel);
     } else {
         handleInitialSelection(state, @intCast(row), @intCast(col));
     }
@@ -519,32 +550,22 @@ fn handleInitialSelection(state: *GameState, row: usize, col: usize) void {
     }
 }
 
-fn handleMoveAttempt(state: *GameState, row: u8, col: u8, selected_square: [2]u8) void {
+fn handleMoveAttempt(state: *GameState, row: u8, col: u8, selected_square: [2]u8) !void {
     if (selected_square[0] == row and selected_square[1] == col) {
         state.selectedSquare = null;
         return;
     }
-    if (state.board[row][col]) |piece| {
-        if (piece.color == state.turn) {
-            state.selectedSquare = .{ row, col };
+    const targetPiece = state.board[row][col];
+    if (targetPiece != null and targetPiece.?.color == state.turn) {
+        state.selectedSquare = .{ row, col };
+        return;
+    }
+    for (state.allLegalMoves[0..state.allLegalMoveCount]) |move| {
+        if (move.to[0] == row and move.to[1] == col and move.from[0] == selected_square[0] and move.from[1] == selected_square[1]) {
+            _ = try state.applyMove(move);
+            state.selectedSquare = null;
+            try state.switchTurn();
             return;
-        }
-        for (state.allLegalMoves[0..state.allLegalMoveCount]) |move| {
-            if (move.to[0] == row and move.to[1] == col and move.from[0] == selected_square[0] and move.from[1] == selected_square[1]) {
-                _ = state.applyMove(move);
-                state.selectedSquare = null;
-                state.switchTurn();
-                return;
-            }
-        }
-    } else {
-        for (state.allLegalMoves[0..state.allLegalMoveCount]) |move| {
-            if (move.to[0] == row and move.to[1] == col and move.from[0] == selected_square[0] and move.from[1] == selected_square[1]) {
-                _ = state.applyMove(move);
-                state.selectedSquare = null;
-                state.switchTurn();
-                return;
-            }
         }
     }
 }
