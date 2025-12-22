@@ -13,6 +13,13 @@ const PieceType = enum { Pawn, Knight, Bishop, Rook, Queen, King };
 
 const Piece = struct { type: PieceType, color: Color };
 
+const CastlingRights = packed struct(u4) {
+    white_king_side: bool,
+    white_queen_side: bool,
+    black_king_side: bool,
+    black_queen_side: bool,
+};
+
 const MoveType = enum(u3) {
     Normal,
     Capture,
@@ -27,6 +34,14 @@ const Move = struct {
     to: [2]u8,
     move_type: MoveType,
     promotion_piece: ?PieceType = null, // Only used if move_type == .Promotion
+};
+
+const HistoryEntry = struct {
+    move: Move,
+    captured_piece: ?Piece,
+    old_castling_rights: CastlingRights,
+    old_en_passant_pos: ?Vec2, // Was there an EP target before this move?
+    half_move_clock: u32, // For the 50-move rule
 };
 
 const PieceAssets = struct {
@@ -76,6 +91,22 @@ fn isInBounds(row: i8, col: i8) bool {
     return row >= 0 and row < 8 and col >= 0 and col < 8;
 }
 
+fn buildInitialBoard() [8][8]?Piece {
+    var init_board: [8][8]?Piece = [1][8]?Piece{[_]?Piece{null} ** 8} ** 8;
+    const back_row = [_]PieceType{ .Rook, .Knight, .Bishop, .Queen, .King, .Bishop, .Knight, .Rook };
+
+    for (back_row, 0..) |p_type, col| {
+        init_board[0][col] = Piece{ .type = p_type, .color = .White };
+        init_board[7][col] = Piece{ .type = p_type, .color = .Black };
+    }
+
+    for (0..8) |col| {
+        init_board[1][col] = Piece{ .type = .Pawn, .color = .White };
+        init_board[6][col] = Piece{ .type = .Pawn, .color = .Black };
+    }
+    return init_board;
+}
+
 // Define the state for the game
 const GameState = struct {
     board: [8][8]?Piece,
@@ -84,33 +115,29 @@ const GameState = struct {
     moveInProgress: bool, // Whether a move is in progress
     allLegalMoves: [218]Move,
     allLegalMoveCount: u8,
+    castlingRights: CastlingRights,
+    allocator: std.mem.Allocator,
+    history: std.ArrayList(HistoryEntry),
 
-    fn init() !GameState {
-        var init_board: [8][8]?Piece = [1][8]?Piece{[_]?Piece{null} ** 8} ** 8;
-        const back_row = [_]PieceType{ .Rook, .Knight, .Bishop, .Queen, .King, .Bishop, .Knight, .Rook };
-
-        for (back_row, 0..) |p_type, col| {
-            init_board[0][col] = Piece{ .type = p_type, .color = .White };
-            init_board[7][col] = Piece{ .type = p_type, .color = .Black };
-        }
-
-        // 3. Setup Pawns (Row 1 for White, Row 6 for Black)
-        for (0..8) |col| {
-            init_board[1][col] = Piece{ .type = .Pawn, .color = .White };
-            init_board[6][col] = Piece{ .type = .Pawn, .color = .Black };
-        }
-
+    fn init(allocator: std.mem.Allocator) !GameState {
         var game_state = GameState{
-            .board = init_board,
+            .allocator = allocator,
+            .board = buildInitialBoard(),
             .selectedSquare = null,
             .turn = Color.Black,
             .moveInProgress = false,
             .allLegalMoves = [_]Move{undefined} ** 218,
             .allLegalMoveCount = 0,
+            .history = try std.ArrayList(HistoryEntry).initCapacity(allocator, 100),
+            .castlingRights = CastlingRights{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true },
         };
         game_state.calculateAllLegalMoves();
-        game_state.filterAllLegalMoves();
         return game_state;
+    }
+
+    fn deinit(self: *GameState) void {
+        self.history.deinit(self.allocator);
+        self.allocator.destroy(self.history);
     }
 
     fn switchTurn(self: *GameState) void {
@@ -152,18 +179,20 @@ const GameState = struct {
             }
         }
 
+        self.filterAllLegalMoves();
+
         // check if king is safe
-        for (self.allLegalMoves[0..self.allLegalMoveCount]) |move| {
-            if (move.move_type == .Capture) {
-                if (self.board[@intCast(move.to[0])][@intCast(move.to[1])] == null) {
-                    self.allLegalMoves[self.allLegalMoveCount] = move;
-                    self.allLegalMoveCount += 1;
-                }
-            } else {
-                self.allLegalMoves[self.allLegalMoveCount] = move;
-                self.allLegalMoveCount += 1;
-            }
-        }
+        // for (self.allLegalMoves[0..self.allLegalMoveCount]) |move| {
+        //     if (move.move_type == .Capture) {
+        //         if (self.board[@intCast(move.to[0])][@intCast(move.to[1])] == null) {
+        //             self.allLegalMoves[self.allLegalMoveCount] = move;
+        //             self.allLegalMoveCount += 1;
+        //         }
+        //     } else {
+        //         self.allLegalMoves[self.allLegalMoveCount] = move;
+        //         self.allLegalMoveCount += 1;
+        //     }
+        // }
     }
 
     fn filterAllLegalMoves(self: *GameState) void {
@@ -173,8 +202,14 @@ const GameState = struct {
             const move = self.allLegalMoves[idx];
             const original_target = self.applyMove(move);
             const attacker_color = if (self.turn == Color.White) Color.Black else Color.White;
+            var target = king_pos;
 
-            if (self.isSquareAttacked(king_pos, attacker_color)) {
+            if (move.from[0] == king_pos[0] and move.from[1] == king_pos[1]) {
+                target[0] = move.to[0];
+                target[1] = move.to[1];
+            }
+
+            if (self.isSquareAttacked(target, attacker_color)) {
                 self.allLegalMoves[idx] = self.allLegalMoves[self.allLegalMoveCount - 1];
                 self.allLegalMoveCount -= 1;
             } else {
@@ -275,7 +310,7 @@ const GameState = struct {
             self.allLegalMoves[self.allLegalMoveCount] = Move{
                 .from = .{ @intCast(row), @intCast(col) },
                 .to = .{ @intCast(r + row_offset), @intCast(col) },
-                .move_type = .Normal,
+                .move_type = .DoublePawnPush,
             };
             self.allLegalMoveCount += 1;
         }
@@ -433,11 +468,15 @@ fn drawPiece(texture: rl.Texture2D, row: u8, col: u8) void {
 }
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     rl.initWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Zig Chess");
     rl.setTargetFPS(60);
     defer rl.closeWindow();
 
-    var game_state = try GameState.init();
+    var game_state = try GameState.init(allocator);
     var assets = try PieceAssets.init();
     defer assets.deinit();
 
