@@ -338,6 +338,7 @@ const GameState = struct {
 
         if (self.turn == .White) {
             if (self.castlingRights.white_king_side and self.board[0][5] == null and self.board[0][6] == null) {
+                if (self.isSquareAttacked(.{ 0, 4 }, .Black) or self.isSquareAttacked(.{ 0, 5 }, .Black) or self.isSquareAttacked(.{ 0, 6 }, .Black) or self.isSquareAttacked(.{ 0, 7 }, .Black)) return;
                 self.allLegalMoves[self.allLegalMoveCount] = Move{
                     .from = .{ @intCast(row), @intCast(col) },
                     .to = .{ 0, 6 },
@@ -346,6 +347,7 @@ const GameState = struct {
                 self.allLegalMoveCount += 1;
             }
             if (self.castlingRights.white_queen_side and self.board[0][1] == null and self.board[0][2] == null and self.board[0][3] == null) {
+                if (self.isSquareAttacked(.{ 0, 0 }, .Black) or self.isSquareAttacked(.{ 0, 1 }, .Black) or self.isSquareAttacked(.{ 0, 2 }, .Black) or self.isSquareAttacked(.{ 0, 3 }, .Black) or self.isSquareAttacked(.{ 0, 4 }, .Black)) return;
                 self.allLegalMoves[self.allLegalMoveCount] = Move{
                     .from = .{ @intCast(row), @intCast(col) },
                     .to = .{ 0, 2 },
@@ -355,6 +357,7 @@ const GameState = struct {
             }
         } else {
             if (self.castlingRights.black_king_side and self.board[7][5] == null and self.board[7][6] == null) {
+                if (self.isSquareAttacked(.{ 7, 4 }, .White) or self.isSquareAttacked(.{ 7, 5 }, .White) or self.isSquareAttacked(.{ 7, 6 }, .White) or self.isSquareAttacked(.{ 7, 7 }, .White)) return;
                 self.allLegalMoves[self.allLegalMoveCount] = Move{
                     .from = .{ @intCast(row), @intCast(col) },
                     .to = .{ 7, 6 },
@@ -363,6 +366,7 @@ const GameState = struct {
                 self.allLegalMoveCount += 1;
             }
             if (self.castlingRights.black_queen_side and self.board[7][1] == null and self.board[7][2] == null and self.board[7][3] == null) {
+                if (self.isSquareAttacked(.{ 7, 0 }, .White) or self.isSquareAttacked(.{ 7, 1 }, .White) or self.isSquareAttacked(.{ 7, 2 }, .White) or self.isSquareAttacked(.{ 7, 3 }, .White) or self.isSquareAttacked(.{ 7, 4 }, .Black)) return;
                 self.allLegalMoves[self.allLegalMoveCount] = Move{
                     .from = .{ @intCast(row), @intCast(col) },
                     .to = .{ 7, 2 },
