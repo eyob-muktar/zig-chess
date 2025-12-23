@@ -506,7 +506,7 @@ const GameState = struct {
     }
 
     fn isSquareAttacked(self: *GameState, target_square: [2]u8, attacker_color: Color) bool {
-        const pawn_dirs = if (attacker_color == .White) [_]Vec2{ .{ .row = 1, .col = 1 }, .{ .row = 1, .col = -1 } } else [_]Vec2{ .{ .row = 1, .col = 1 }, .{ .row = 1, .col = -1 } };
+        const pawn_dirs = if (attacker_color == .White) [_]Vec2{ .{ .row = -1, .col = 1 }, .{ .row = -1, .col = -1 } } else [_]Vec2{ .{ .row = 1, .col = 1 }, .{ .row = 1, .col = -1 } };
         for (pawn_dirs) |dir| {
             var r: i8 = @intCast(target_square[0]);
             var c: i8 = @intCast(target_square[1]);
