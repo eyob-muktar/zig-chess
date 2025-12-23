@@ -33,15 +33,16 @@ const Move = struct {
     from: [2]u8,
     to: [2]u8,
     move_type: MoveType,
-    promotion_piece: ?PieceType = null, // Only used if move_type == .Promotion
+    promotion_piece: ?PieceType = null,
 };
 
 const HistoryEntry = struct {
     move: Move,
     captured_piece: ?Piece,
     old_castling_rights: CastlingRights,
-    old_en_passant_pos: ?[2]u8, // Was there an EP target before this move?
-    half_move_clock: u32, // For the 50-move rule
+    old_en_passant_pos: ?[2]u8,
+    old_king_pos: [2]u8,
+    half_move_clock: u32,
 };
 
 const PieceAssets = struct {
@@ -107,7 +108,6 @@ fn buildInitialBoard() [8][8]?Piece {
     return init_board;
 }
 
-// Define the state for the game
 const GameState = struct {
     board: [8][8]?Piece,
     selectedSquare: ?[2]u8,
@@ -119,6 +119,8 @@ const GameState = struct {
     allocator: std.mem.Allocator,
     history: std.ArrayList(HistoryEntry),
     en_passant_pos: ?[2]u8,
+    black_king_pos: [2]u8,
+    white_king_pos: [2]u8,
 
     fn init(allocator: std.mem.Allocator) !GameState {
         var game_state = GameState{
@@ -132,6 +134,8 @@ const GameState = struct {
             .history = try std.ArrayList(HistoryEntry).initCapacity(allocator, 100),
             .castlingRights = CastlingRights{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true },
             .en_passant_pos = null,
+            .black_king_pos = [2]u8{ 7, 4 },
+            .white_king_pos = [2]u8{ 0, 4 },
         };
         try game_state.calculateAllLegalMoves();
         return game_state;
@@ -139,7 +143,6 @@ const GameState = struct {
 
     fn deinit(self: *GameState) void {
         self.history.deinit(self.allocator);
-        self.allocator.destroy(self.history);
     }
 
     fn switchTurn(self: *GameState) !void {
@@ -154,6 +157,14 @@ const GameState = struct {
         if (move.move_type == .EnPassant) {
             target = self.board[move.from[0]][move.to[1]];
             self.board[move.from[0]][move.to[1]] = null;
+        }
+        const king_pos_to_save = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
+
+        const piece = self.board[move.from[0]][move.from[1]];
+        if (piece) |nonull_piece| {
+            if (nonull_piece.type == .King) {
+                if (nonull_piece.color == .White) self.white_king_pos = move.to else self.black_king_pos = move.to;
+            }
         }
         if (move.move_type == .Castling) {
             if (move.to[1] == 6) {
@@ -175,6 +186,7 @@ const GameState = struct {
             .old_castling_rights = self.castlingRights,
             .half_move_clock = 0,
             .old_en_passant_pos = self.en_passant_pos,
+            .old_king_pos = king_pos_to_save,
         };
 
         if (move.move_type == .DoublePawnPush) {
@@ -210,6 +222,11 @@ const GameState = struct {
                 self.board[move.to[0]][move.to[1]] = entry.captured_piece;
             }
 
+            if (self.turn == .White) {
+                self.white_king_pos = entry.old_king_pos;
+            } else {
+                self.black_king_pos = entry.old_king_pos;
+            }
             self.castlingRights = entry.old_castling_rights;
             self.en_passant_pos = entry.old_en_passant_pos;
         }
@@ -238,12 +255,12 @@ const GameState = struct {
     }
 
     fn filterAllLegalMoves(self: *GameState) !void {
-        const king_pos = self.findKing(self.turn);
+        const attacker_color = if (self.turn == Color.White) Color.Black else Color.White;
+        const king_pos = if (self.turn == Color.White) self.white_king_pos else self.black_king_pos;
         var idx: usize = 0;
         while (idx < self.allLegalMoveCount) {
             const move = self.allLegalMoves[idx];
             _ = try self.applyMove(move);
-            const attacker_color = if (self.turn == Color.White) Color.Black else Color.White;
             var target = king_pos;
 
             if (move.from[0] == king_pos[0] and move.from[1] == king_pos[1]) {
@@ -259,22 +276,6 @@ const GameState = struct {
             }
             try self.undoMove(move);
         }
-    }
-
-    fn findKing(self: *GameState, color: Color) [2]u8 {
-        for (self.board, 0..) |row, row_idx| {
-            for (row, 0..) |col, col_idx| {
-                if (col) |piece| {
-                    if (piece.type == .King and piece.color == color) {
-                        return .{
-                            @intCast(row_idx),
-                            @intCast(col_idx),
-                        };
-                    }
-                }
-            }
-        }
-        unreachable;
     }
 
     fn updateCastlingRights(self: *GameState, move: Move) void {
@@ -306,12 +307,6 @@ const GameState = struct {
                     }
                 }
             }
-        }
-    }
-
-    fn canKingCastle(self: GameState) bool {
-        if (self.turn == .White) {
-            if (self.castlingRights.white_king_side) {}
         }
     }
 
@@ -596,6 +591,7 @@ pub fn main() !void {
     defer rl.closeWindow();
 
     var game_state = try GameState.init(allocator);
+    defer game_state.deinit();
     var assets = try PieceAssets.init();
     defer assets.deinit();
 
@@ -690,4 +686,51 @@ fn drawBoard(state: GameState, assets: PieceAssets) void {
             }
         }
     }
+}
+
+fn perft(state: *GameState, depth: u32) !u64 {
+    if (depth == 0) return 1;
+
+    var nodes: u64 = 0;
+
+    _ = try state.calculateAllLegalMoves();
+
+    // This prevents child recursions from overwriting the loop data.
+    var local_moves: [218]Move = undefined;
+    const move_count = state.allLegalMoveCount;
+    @memcpy(local_moves[0..move_count], state.allLegalMoves[0..move_count]);
+
+    for (local_moves[0..move_count]) |move| {
+        _ = try state.applyMove(move);
+        try state.switchTurn();
+
+        nodes += try perft(state, depth - 1);
+
+        try state.switchTurn();
+        try state.undoMove(move);
+    }
+
+    return nodes;
+}
+
+const testing = std.testing;
+
+test "Chess Move Generation - Initial Position" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var state = try GameState.init(allocator);
+    defer state.deinit();
+
+    // Verify Depth 1 (White's first moves)
+    try testing.expectEqual(@as(u64, 20), perft(&state, 1));
+
+    // Verify Depth 2 (Black's responses)
+    try testing.expectEqual(@as(u64, 400), perft(&state, 2));
+
+    // Verify Depth 3 (8,902 moves)
+    try testing.expectEqual(@as(u64, 8902), perft(&state, 3));
+
+    try testing.expectEqual(@as(u64, 197281), perft(&state, 4));
 }
