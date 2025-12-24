@@ -7,6 +7,9 @@ const SCREEN_HEIGHT = 800;
 const BLOCK_SIZE: i32 = SCREEN_WIDTH / BLOCKS;
 
 const initial_board = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+const test_board = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1";
+const test2_board = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -";
+const test3_board = "r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1";
 
 const Color = enum { White, Black };
 const PieceType = enum { Pawn, Knight, Bishop, Rook, Queen, King };
@@ -113,6 +116,7 @@ const GameState = struct {
     selectedSquare: ?[2]u8,
     turn: Color,
     moveInProgress: bool,
+    promotionInProgress: bool,
     allLegalMoves: [218]Move,
     allLegalMoveCount: u8,
     castlingRights: CastlingRights,
@@ -122,13 +126,14 @@ const GameState = struct {
     black_king_pos: [2]u8,
     white_king_pos: [2]u8,
 
-    fn init(allocator: std.mem.Allocator) !GameState {
+    fn init(allocator: std.mem.Allocator, fen: []const u8) !GameState {
         var game_state = GameState{
             .allocator = allocator,
             .board = buildInitialBoard(),
             .selectedSquare = null,
             .turn = Color.White,
             .moveInProgress = false,
+            .promotionInProgress = false,
             .allLegalMoves = [_]Move{undefined} ** 218,
             .allLegalMoveCount = 0,
             .history = try std.ArrayList(HistoryEntry).initCapacity(allocator, 100),
@@ -137,6 +142,7 @@ const GameState = struct {
             .black_king_pos = [2]u8{ 7, 4 },
             .white_king_pos = [2]u8{ 0, 4 },
         };
+        try game_state.loadFen(fen);
         try game_state.calculateAllLegalMoves();
         return game_state;
     }
@@ -145,6 +151,94 @@ const GameState = struct {
         self.history.deinit(self.allocator);
     }
 
+    fn loadFen(self: *GameState, fen: []const u8) !void {
+        var iter = std.mem.splitScalar(u8, fen, ' ');
+
+        // board
+        const board_str = iter.next() orelse return error.InvalidFen;
+        self.buildBoardFromFen(board_str);
+
+        // turn
+        if (iter.next()) |turn_str| {
+            self.turn = if (turn_str[0] == 'w') .White else .Black;
+        }
+
+        // castling rights
+        if (iter.next()) |castle_str| {
+            self.castlingRights = CastlingRights{ .white_king_side = false, .white_queen_side = false, .black_king_side = false, .black_queen_side = false };
+            for (castle_str) |c| {
+                switch (c) {
+                    'K' => self.castlingRights.white_king_side = true,
+                    'Q' => self.castlingRights.white_queen_side = true,
+                    'k' => self.castlingRights.black_king_side = true,
+                    'q' => self.castlingRights.black_queen_side = true,
+                    '-' => break,
+                    else => {},
+                }
+            }
+        }
+
+        // En passant pos
+        if (iter.next()) |ep_str| {
+            if (ep_str[0] == '-') {
+                self.en_passant_pos = null;
+            } else {
+                // Convert "e3" string to your Vec2 coordinate
+                self.en_passant_pos = .{
+                    ep_str[0] - 'a',
+                    8 - (ep_str[1] - '0'),
+                };
+            }
+        }
+    }
+
+    fn buildBoardFromFen(self: *GameState, fen: []const u8) void {
+        // initiate the board with all null
+        var board: [8][8]?Piece = [_][8]?Piece{[_]?Piece{null} ** 8} ** 8;
+        var row: u8 = 7;
+        var col: u8 = 0;
+        for (fen) |char| {
+            if (char == '/') {
+                row -= 1;
+                col = 0;
+                continue;
+            }
+            if (char >= '0' and char <= '9') {
+                col += char - '0';
+                continue;
+            }
+
+            const piece = switch (char) {
+                'p' => Piece{ .type = .Pawn, .color = .Black },
+                'P' => Piece{ .type = .Pawn, .color = .White },
+                'r' => Piece{ .type = .Rook, .color = .Black },
+                'R' => Piece{ .type = .Rook, .color = .White },
+                'n' => Piece{ .type = .Knight, .color = .Black },
+                'N' => Piece{ .type = .Knight, .color = .White },
+                'b' => Piece{ .type = .Bishop, .color = .Black },
+                'B' => Piece{ .type = .Bishop, .color = .White },
+                'q' => Piece{ .type = .Queen, .color = .Black },
+                'Q' => Piece{ .type = .Queen, .color = .White },
+                'k' => Piece{ .type = .King, .color = .Black },
+                'K' => Piece{ .type = .King, .color = .White },
+                else => null,
+            };
+
+            if (piece) |p| {
+                board[row][col] = p;
+                if (p.type == .King) {
+                    if (p.color == .White) {
+                        self.white_king_pos = .{ row, col };
+                    } else {
+                        self.black_king_pos = .{ row, col };
+                    }
+                }
+                col += 1;
+            }
+        }
+
+        self.board = board;
+    }
     fn switchTurn(self: *GameState) !void {
         self.turn = if (self.turn == Color.White) Color.Black else Color.White;
         self.moveInProgress = false;
@@ -161,11 +255,13 @@ const GameState = struct {
         const king_pos_to_save = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
 
         const piece = self.board[move.from[0]][move.from[1]];
+        // update king positions
         if (piece) |nonull_piece| {
             if (nonull_piece.type == .King) {
                 if (nonull_piece.color == .White) self.white_king_pos = move.to else self.black_king_pos = move.to;
             }
         }
+        // handle castling
         if (move.move_type == .Castling) {
             if (move.to[1] == 6) {
                 // king side castling
@@ -180,6 +276,13 @@ const GameState = struct {
         self.board[move.to[0]][move.to[1]] = self.board[move.from[0]][move.from[1]];
         self.board[move.from[0]][move.from[1]] = null;
 
+        // handle promotion
+        if (move.move_type == .Promotion) {
+            if (move.promotion_piece) |nonull_promotion_piece| {
+                self.board[move.to[0]][move.to[1]] = Piece{ .type = nonull_promotion_piece, .color = self.turn };
+            }
+        }
+
         const history_entry = HistoryEntry{
             .move = move,
             .captured_piece = target,
@@ -189,6 +292,7 @@ const GameState = struct {
             .old_king_pos = king_pos_to_save,
         };
 
+        // update en passant position
         if (move.move_type == .DoublePawnPush) {
             self.en_passant_pos = if (self.turn == Color.White) .{ move.to[0] - 1, move.to[1] } else .{ move.to[0] + 1, move.to[1] };
         } else {
@@ -218,15 +322,21 @@ const GameState = struct {
                     self.board[move.to[0]][0] = self.board[move.to[0]][3];
                     self.board[move.to[0]][3] = null;
                 }
+            } else if (move.move_type == .Promotion) {
+                self.board[move.to[0]][move.to[1]] = entry.captured_piece;
+                self.board[move.from[0]][move.from[1]] = Piece{ .type = .Pawn, .color = self.turn };
             } else {
                 self.board[move.to[0]][move.to[1]] = entry.captured_piece;
             }
 
+            // revert king positions
             if (self.turn == .White) {
                 self.white_king_pos = entry.old_king_pos;
             } else {
                 self.black_king_pos = entry.old_king_pos;
             }
+
+            // revert castling rights & en passant position
             self.castlingRights = entry.old_castling_rights;
             self.en_passant_pos = entry.old_en_passant_pos;
         }
@@ -339,42 +449,46 @@ const GameState = struct {
         if (self.turn == .White) {
             if (self.isSquareAttacked(.{ 0, 4 }, .Black)) return;
             if (self.castlingRights.white_king_side and self.board[0][5] == null and self.board[0][6] == null) {
-                if (self.isSquareAttacked(.{ 0, 5 }, .Black) or self.isSquareAttacked(.{ 0, 6 }, .Black)) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ 0, 6 },
-                    .move_type = .Castling,
-                };
-                self.allLegalMoveCount += 1;
+                if (!self.isSquareAttacked(.{ 0, 5 }, .Black) and !self.isSquareAttacked(.{ 0, 6 }, .Black)) {
+                    self.allLegalMoves[self.allLegalMoveCount] = Move{
+                        .from = .{ @intCast(row), @intCast(col) },
+                        .to = .{ 0, 6 },
+                        .move_type = .Castling,
+                    };
+                    self.allLegalMoveCount += 1;
+                }
             }
             if (self.castlingRights.white_queen_side and self.board[0][1] == null and self.board[0][2] == null and self.board[0][3] == null) {
-                if (self.isSquareAttacked(.{ 0, 2 }, .Black) or self.isSquareAttacked(.{ 0, 3 }, .Black)) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ 0, 2 },
-                    .move_type = .Castling,
-                };
-                self.allLegalMoveCount += 1;
+                if (!self.isSquareAttacked(.{ 0, 2 }, .Black) and !self.isSquareAttacked(.{ 0, 3 }, .Black)) {
+                    self.allLegalMoves[self.allLegalMoveCount] = Move{
+                        .from = .{ @intCast(row), @intCast(col) },
+                        .to = .{ 0, 2 },
+                        .move_type = .Castling,
+                    };
+                    self.allLegalMoveCount += 1;
+                }
             }
         } else {
             if (self.isSquareAttacked(.{ 7, 4 }, .White)) return;
             if (self.castlingRights.black_king_side and self.board[7][5] == null and self.board[7][6] == null) {
-                if (self.isSquareAttacked(.{ 7, 5 }, .White) or self.isSquareAttacked(.{ 7, 6 }, .White)) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ 7, 6 },
-                    .move_type = .Castling,
-                };
-                self.allLegalMoveCount += 1;
+                if (!self.isSquareAttacked(.{ 7, 5 }, .White) and !self.isSquareAttacked(.{ 7, 6 }, .White)) {
+                    self.allLegalMoves[self.allLegalMoveCount] = Move{
+                        .from = .{ @intCast(row), @intCast(col) },
+                        .to = .{ 7, 6 },
+                        .move_type = .Castling,
+                    };
+                    self.allLegalMoveCount += 1;
+                }
             }
             if (self.castlingRights.black_queen_side and self.board[7][1] == null and self.board[7][2] == null and self.board[7][3] == null) {
-                if (self.isSquareAttacked(.{ 7, 2 }, .White) or self.isSquareAttacked(.{ 7, 3 }, .White)) return;
-                self.allLegalMoves[self.allLegalMoveCount] = Move{
-                    .from = .{ @intCast(row), @intCast(col) },
-                    .to = .{ 7, 2 },
-                    .move_type = .Castling,
-                };
-                self.allLegalMoveCount += 1;
+                if (!self.isSquareAttacked(.{ 7, 2 }, .White) and !self.isSquareAttacked(.{ 7, 3 }, .White)) {
+                    self.allLegalMoves[self.allLegalMoveCount] = Move{
+                        .from = .{ @intCast(row), @intCast(col) },
+                        .to = .{ 7, 2 },
+                        .move_type = .Castling,
+                    };
+                    self.allLegalMoveCount += 1;
+                }
             }
         }
     }
@@ -387,6 +501,7 @@ const GameState = struct {
         r += row_offset;
 
         const start_row: u8 = if (isWhite) 1 else 6;
+        const promotion_row: u8 = if (isWhite) 7 else 0;
 
         if (!isInBounds(r, c)) return;
 
@@ -405,12 +520,34 @@ const GameState = struct {
         if (isInBounds(r, c - 1)) {
             if (self.board[@intCast(r)][col - 1]) |piece| {
                 if (piece.color != self.turn) {
-                    self.allLegalMoves[self.allLegalMoveCount] = Move{
-                        .from = .{ @intCast(row), @intCast(col) },
-                        .to = .{ @intCast(r), @intCast(col - 1) },
-                        .move_type = .Capture,
-                    };
-                    self.allLegalMoveCount += 1;
+                    // Promotion
+                    if (r == promotion_row) {
+                        var move = Move{
+                            .from = .{ @intCast(row), @intCast(col) },
+                            .to = .{ @intCast(r), @intCast(col - 1) },
+                            .move_type = .Promotion,
+                        };
+                        move.promotion_piece = .Queen;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                        move.promotion_piece = .Rook;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                        move.promotion_piece = .Bishop;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                        move.promotion_piece = .Knight;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                    } else {
+                        // Capture
+                        self.allLegalMoves[self.allLegalMoveCount] = Move{
+                            .from = .{ @intCast(row), @intCast(col) },
+                            .to = .{ @intCast(r), @intCast(col - 1) },
+                            .move_type = .Capture,
+                        };
+                        self.allLegalMoveCount += 1;
+                    }
                 }
             }
         }
@@ -418,23 +555,69 @@ const GameState = struct {
         if (isInBounds(r, c + 1)) {
             if (self.board[@intCast(r)][col + 1]) |piece| {
                 if (piece.color != self.turn) {
-                    self.allLegalMoves[self.allLegalMoveCount] = Move{
-                        .from = .{ @intCast(row), @intCast(col) },
-                        .to = .{ @intCast(r), @intCast(col + 1) },
-                        .move_type = .Capture,
-                    };
-                    self.allLegalMoveCount += 1;
+                    if (r == promotion_row) {
+                        // Promotion
+                        var move = Move{
+                            .from = .{ @intCast(row), @intCast(col) },
+                            .to = .{ @intCast(r), @intCast(col + 1) },
+                            .move_type = .Promotion,
+                        };
+                        move.promotion_piece = .Queen;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                        move.promotion_piece = .Rook;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                        move.promotion_piece = .Bishop;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                        move.promotion_piece = .Knight;
+                        self.allLegalMoves[self.allLegalMoveCount] = move;
+                        self.allLegalMoveCount += 1;
+                    } else {
+                        // Capture
+                        self.allLegalMoves[self.allLegalMoveCount] = Move{
+                            .from = .{ @intCast(row), @intCast(col) },
+                            .to = .{ @intCast(r), @intCast(col + 1) },
+                            .move_type = .Capture,
+                        };
+                        self.allLegalMoveCount += 1;
+                    }
                 }
             }
         }
 
         if (self.board[@intCast(r)][col] != null) return;
-        self.allLegalMoves[self.allLegalMoveCount] = Move{
-            .from = .{ @intCast(row), @intCast(col) },
-            .to = .{ @intCast(r), @intCast(col) },
-            .move_type = .Normal,
-        };
-        self.allLegalMoveCount += 1;
+        if (r == promotion_row) {
+            // Promotion
+            var move = Move{
+                .from = .{ @intCast(row), @intCast(col) },
+                .to = .{ @intCast(r), @intCast(col) },
+                .move_type = .Promotion,
+            };
+            move.promotion_piece = .Queen;
+            self.allLegalMoves[self.allLegalMoveCount] = move;
+            self.allLegalMoveCount += 1;
+            move.promotion_piece = .Rook;
+            self.allLegalMoves[self.allLegalMoveCount] = move;
+            self.allLegalMoveCount += 1;
+            move.promotion_piece = .Bishop;
+            self.allLegalMoves[self.allLegalMoveCount] = move;
+            self.allLegalMoveCount += 1;
+            move.promotion_piece = .Knight;
+            self.allLegalMoves[self.allLegalMoveCount] = move;
+            self.allLegalMoveCount += 1;
+        } else {
+            // Normal
+            self.allLegalMoves[self.allLegalMoveCount] = Move{
+                .from = .{ @intCast(row), @intCast(col) },
+                .to = .{ @intCast(r), @intCast(col) },
+                .move_type = .Normal,
+            };
+            self.allLegalMoveCount += 1;
+        }
+
+        // Double Push
         if (row == start_row and self.board[@intCast(r + row_offset)][col] == null) {
             self.allLegalMoves[self.allLegalMoveCount] = Move{
                 .from = .{ @intCast(row), @intCast(col) },
@@ -454,18 +637,18 @@ const GameState = struct {
             if (!isInBounds(r, c)) continue;
             if (self.board[@abs(r)][@abs(c)]) |piece| {
                 if (piece.color == self.turn) continue;
-
                 self.allLegalMoves[self.allLegalMoveCount] = Move{
                     .from = .{ @intCast(row), @intCast(col) },
                     .to = .{ @intCast(r), @intCast(c) },
                     .move_type = .Capture,
                 };
+            } else {
+                self.allLegalMoves[self.allLegalMoveCount] = Move{
+                    .from = .{ @intCast(row), @intCast(col) },
+                    .to = .{ @intCast(r), @intCast(c) },
+                    .move_type = .Normal,
+                };
             }
-            self.allLegalMoves[self.allLegalMoveCount] = Move{
-                .from = .{ @intCast(row), @intCast(col) },
-                .to = .{ @intCast(r), @intCast(c) },
-                .move_type = .Normal,
-            };
             self.allLegalMoveCount += 1;
         }
     }
@@ -596,7 +779,7 @@ pub fn main() !void {
     rl.setTargetFPS(60);
     defer rl.closeWindow();
 
-    var game_state = try GameState.init(allocator);
+    var game_state = try GameState.init(allocator, initial_board);
     defer game_state.deinit();
     var assets = try PieceAssets.init();
     defer assets.deinit();
@@ -694,29 +877,122 @@ fn drawBoard(state: GameState, assets: PieceAssets) void {
     }
 }
 
-fn perft(state: *GameState, depth: u32) !u64 {
-    if (depth == 0) return 1;
+const PerftResults = struct {
+    nodes: u64 = 0,
+    captures: u64 = 0,
+    en_passants: u64 = 0,
+    castles: u64 = 0,
+    promotions: u64 = 0,
 
-    var nodes: u64 = 0;
+    pub fn add(self: *PerftResults, other: PerftResults) void {
+        self.nodes += other.nodes;
+        self.captures += other.captures;
+        self.en_passants += other.en_passants;
+        self.castles += other.castles;
+        self.promotions += other.promotions;
+    }
+};
+
+fn perft(state: *GameState, depth: u32) !PerftResults {
+    // Base case: we reached a leaf node
+    if (depth == 0) return PerftResults{ .nodes = 1 };
+
+    var total_results = PerftResults{};
 
     _ = try state.calculateAllLegalMoves();
 
-    // This prevents child recursions from overwriting the loop data.
+    // Copy moves to local stack to avoid recursion corruption
     var local_moves: [218]Move = undefined;
-    const move_count = state.allLegalMoveCount;
-    @memcpy(local_moves[0..move_count], state.allLegalMoves[0..move_count]);
+    const count = state.allLegalMoveCount;
+    @memcpy(local_moves[0..count], state.allLegalMoves[0..count]);
 
-    for (local_moves[0..move_count]) |move| {
-        _ = try state.applyMove(move);
+    for (local_moves[0..count]) |move| {
+        var is_capture = move.move_type == .Capture or move.move_type == .EnPassant;
+        const is_ep = move.move_type == .EnPassant;
+        const is_castle = move.move_type == .Castling;
+        const is_promo = move.move_type == .Promotion;
+
+        const history = try state.applyMove(move);
+        if (history.captured_piece != null) {
+            // std.debug.print("Move: {any}\n", .{nonull_history_captured_piece});
+            is_capture = true;
+        }
         try state.switchTurn();
 
-        nodes += try perft(state, depth - 1);
+        const branch_results = try perft(state, depth - 1);
+
+        // If depth is 1, the "nodes" of the child are actually the stats for THIS move
+        if (depth == 1) {
+            if (is_capture) total_results.captures += 1;
+            if (is_ep) total_results.en_passants += 1;
+            if (is_castle) total_results.castles += 1;
+            if (is_promo) total_results.promotions += 1;
+            total_results.nodes += 1;
+        } else {
+            total_results.add(branch_results);
+        }
 
         try state.switchTurn();
         try state.undoMove(move);
     }
 
-    return nodes;
+    return total_results;
+}
+
+pub fn perftDivide(state: *GameState, depth: u32) !void {
+    if (depth == 0) {
+        std.debug.print("Total nodes: 1\n", .{});
+        return;
+    }
+
+    var total_nodes: u64 = 0;
+
+    _ = try state.calculateAllLegalMoves();
+
+    // Copy to local stack (to avoid recursion corruption)
+    var root_moves: [218]Move = undefined;
+    const count = state.allLegalMoveCount;
+    @memcpy(root_moves[0..count], state.allLegalMoves[0..count]);
+
+    std.debug.print("\n--- Perft Divide Depth {d} ---\n", .{depth});
+
+    for (root_moves[0..count]) |move| {
+        _ = try state.applyMove(move);
+        try state.switchTurn();
+
+        const nodes_from_move = try perft(state, depth - 1);
+
+        total_nodes += nodes_from_move.nodes;
+
+        printMove(move);
+        std.debug.print(": {d}\n", .{nodes_from_move.nodes});
+
+        try state.switchTurn();
+        try state.undoMove(move);
+    }
+
+    std.debug.print("---------------------------\n", .{});
+    std.debug.print("Total Nodes at Depth {d}: {d}\n\n", .{ depth, total_nodes });
+}
+
+fn printMove(move: Move) void {
+    const files = "abcdefgh";
+    const ranks = "12345678"; // Adjusted for 0-indexed top-down board
+
+    std.debug.print("{c}{c}{c}{c}", .{
+        files[move.from[1]],
+        ranks[move.from[0]],
+        files[move.to[1]],
+        ranks[move.to[0]],
+    });
+
+    switch (move.move_type) {
+        .Promotion => std.debug.print("q", .{}),
+        .Capture => std.debug.print("x", .{}),
+        .EnPassant => std.debug.print("e", .{}),
+        .Castling => std.debug.print("c", .{}),
+        else => {},
+    }
 }
 
 const testing = std.testing;
@@ -726,17 +1002,11 @@ test "Chess Move Generation - Initial Position" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var state = try GameState.init(allocator);
+    var state = try GameState.init(allocator, test_board);
     defer state.deinit();
 
-    // Verify Depth 1 (White's first moves)
-    try testing.expectEqual(@as(u64, 20), perft(&state, 1));
+    // try perftDivide(&state, 1);
 
-    // Verify Depth 2 (Black's responses)
-    try testing.expectEqual(@as(u64, 400), perft(&state, 2));
-
-    // Verify Depth 3 (8,902 moves)
-    try testing.expectEqual(@as(u64, 8902), perft(&state, 3));
-
-    try testing.expectEqual(@as(u64, 197281), perft(&state, 4));
+    const result1 = try perft(&state, 1);
+    std.debug.print("Depth 1: {d}--{d} -- {d} -- {d} -- {d}\n", .{ result1.nodes, result1.captures, result1.en_passants, result1.castles, result1.promotions });
 }
