@@ -8,6 +8,7 @@ const Piece = types.Piece;
 const Move = types.Move;
 const PieceType = types.PieceType;
 const CastlingRights = types.CastlingRights;
+const GameStatus = types.GameStatus;
 
 const Vec2 = struct { row: i8, col: i8 };
 
@@ -38,6 +39,7 @@ pub const Game = struct {
 
     moves: [256]Move = undefined,
     move_count: usize = 0,
+    status: GameStatus = .ongoing,
 
     pub fn init(allocator: std.mem.Allocator, fen: []const u8) !Game {
         var self = Game{
@@ -128,6 +130,18 @@ pub const Game = struct {
                     8 - (ep_str[1] - '0'),
                 };
             }
+        }
+    }
+
+    pub fn getGameStatus(self: *Game) GameStatus {
+        if (self.move_count > 0) return .ongoing;
+
+        const king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
+        const attacker = if (self.turn == .White) .Black else .White;
+        if (self.isSquareAttacked(king_pos, attacker)) {
+            return .checkmate;
+        } else {
+            return .stalemate;
         }
     }
 
@@ -307,6 +321,20 @@ pub const Game = struct {
             }
         }
         self.move_count = legal_count;
+
+        // update game status
+        if (self.move_count == 0) {
+            const king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
+            const in_check = self.isSquareAttacked(king_pos, if (self.turn == .White) .Black else .White);
+
+            if (in_check) {
+                self.status = if (self.turn == .White) .black_wins else .white_wins;
+            } else {
+                self.status = .draw;
+            }
+        } else {
+            self.status = .ongoing;
+        }
     }
 
     fn addMove(self: *Game, move: Move) void {

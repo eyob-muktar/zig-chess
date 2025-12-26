@@ -12,6 +12,7 @@ const UIInteractionState = enum {
     dragging_piece,
     promoting,
 };
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
 const UI = struct {
     game: engine.Game,
@@ -24,10 +25,8 @@ const UI = struct {
     textures: std.AutoHashMap(types.Piece, rl.Texture2D),
 
     pub fn init(allocator: std.mem.Allocator) !UI {
-        const start_fen = "8/2p5/3p4/KP5r/1r5k/8/4PpP1/8 b - - 0 1";
-
         return UI{
-            .game = try engine.Game.init(allocator, start_fen),
+            .game = try engine.Game.init(allocator, START_FEN),
             .state = .idle,
             .selected_sq = null,
             .pending_from = null,
@@ -73,15 +72,27 @@ const UI = struct {
     }
 
     pub fn update(self: *UI) !void {
-        if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
-            const mouse = rl.getMousePosition();
-            const col = @divFloor(@as(i32, @intFromFloat(mouse.x)), BLOCK_SIZE);
-            const row = @divFloor(@as(i32, @intFromFloat(mouse.y)), BLOCK_SIZE);
+        // Block interactions if game is over
+        if (self.game.status == .ongoing) {
+            if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
+                const mouse = rl.getMousePosition();
+                const col = @divFloor(@as(i32, @intFromFloat(mouse.x)), BLOCK_SIZE);
+                const row = @divFloor(@as(i32, @intFromFloat(mouse.y)), BLOCK_SIZE);
 
-            const engine_row = row;
+                const engine_row = row;
 
-            if (engine_row >= 0 and engine_row < 8 and col >= 0 and col < 8) {
-                try self.handleBoardClick(@intCast(engine_row), @intCast(col));
+                if (engine_row >= 0 and engine_row < 8 and col >= 0 and col < 8) {
+                    try self.handleBoardClick(@intCast(engine_row), @intCast(col));
+                }
+            }
+        } else {
+            // Restart logic
+            if (rl.isKeyPressed(rl.KeyboardKey.r)) {
+                try self.game.loadFen(START_FEN);
+                try self.game.generateLegalMoves();
+                self.state = .idle;
+                self.selected_sq = null;
+                return;
             }
         }
     }
@@ -252,6 +263,30 @@ const UI = struct {
                 }
             }
         }
+
+        if (self.game.status != .ongoing) {
+            // black overlay
+            rl.drawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.fade(rl.Color.black, 0.5));
+
+            // message Box
+            const msg = getEndGameMessage(self.game.status);
+            const fontSize = 40;
+            const textWidth = @max(rl.measureText(msg[0..], fontSize), rl.measureText("Press 'R' to restart", 20));
+
+            const boxW = @as(f32, @floatFromInt(textWidth)) + 60;
+            const boxH = 120;
+            const boxX = @as(f32, (SCREEN_WIDTH - boxW) / 2);
+            const boxY = @as(f32, (SCREEN_HEIGHT - boxH) / 2);
+
+            // box Shadow
+            rl.drawRectangleRec(rl.Rectangle{ .x = boxX + 5, .y = boxY + 5, .width = boxW, .height = boxH }, rl.fade(rl.Color.black, 0.3));
+            // main Box
+            rl.drawRectangleRec(rl.Rectangle{ .x = boxX, .y = boxY, .width = boxW, .height = boxH }, rl.Color.ray_white);
+            rl.drawRectangleLinesEx(rl.Rectangle{ .x = boxX, .y = boxY, .width = boxW, .height = boxH }, 3, rl.Color.yellow);
+
+            rl.drawText(msg, @intFromFloat(boxX + 30), @intFromFloat(boxY + 30), fontSize, rl.Color.black);
+            rl.drawText("Press 'R' to restart", @intFromFloat(boxX + 30), @intFromFloat(boxY + 80), 20, rl.Color.black);
+        }
     }
 
     pub fn loadTextureFromImage(path: [:0]const u8) !rl.Texture2D {
@@ -259,6 +294,15 @@ const UI = struct {
         const texture = try rl.loadTextureFromImage(image);
         rl.unloadImage(image);
         return texture;
+    }
+
+    pub fn getEndGameMessage(status: types.GameStatus) [:0]const u8 {
+        return switch (status) {
+            .white_wins => "CHECKMATE: WHITE WINS!",
+            .black_wins => "CHECKMATE: BLACK WINS!",
+            .draw => "DRAW",
+            .ongoing => "",
+        };
     }
 };
 

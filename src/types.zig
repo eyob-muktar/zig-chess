@@ -31,8 +31,4 @@ pub const CastlingRights = packed struct(u4) {
     black_queen_side: bool = true,
 };
 
-pub const GameStatus = enum {
-    ongoing,
-    checkmate,
-    stalemate,
-};
+pub const GameStatus = enum { ongoing, white_wins, black_wins, draw };
