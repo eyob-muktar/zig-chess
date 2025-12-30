@@ -274,9 +274,9 @@ pub const Game = struct {
                             .Pawn => self.getPawnMoves(r, c),
                             .King => self.getKingMoves(r, c),
                             .Knight => self.genKnightMoves(r, c),
-                            .Bishop => self.genSliderMoves(r, c, &bishop_dirs),
-                            .Rook => self.genSliderMoves(r, c, &rook_dirs),
-                            .Queen => self.genSliderMoves(r, c, &queen_dirs),
+                            .Bishop => self.genSliderMoves(r, c, &bishop_dirs, .Bishop),
+                            .Rook => self.genSliderMoves(r, c, &rook_dirs, .Rook),
+                            .Queen => self.genSliderMoves(r, c, &queen_dirs, .Queen),
                         }
                     }
                 }
@@ -365,10 +365,10 @@ pub const Game = struct {
             if (r == promotion_row) {
                 self.addPromotionMoves(row, col, @intCast(r), @intCast(c), false);
             } else {
-                self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal, .piece = .Pawn });
                 // Double Push
                 if (row == start_row and self.board[@intCast(r + row_offset)][@intCast(c)] == null) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r + row_offset), @intCast(c) }, .move_type = .DoublePawnPush });
+                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r + row_offset), @intCast(c) }, .piece = .Pawn, .move_type = .DoublePawnPush });
                 }
             }
         }
@@ -383,14 +383,14 @@ pub const Game = struct {
                         if (r == promotion_row) {
                             self.addPromotionMoves(row, col, @intCast(r), @intCast(cc), true);
                         } else {
-                            self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .Capture });
+                            self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .Capture });
                         }
                     }
                 }
                 // En Passant
                 if (self.en_passant_pos) |ep| {
                     if (ep[0] == r and ep[1] == cc) {
-                        self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .EnPassant });
+                        self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .EnPassant });
                     }
                 }
             }
@@ -401,7 +401,7 @@ pub const Game = struct {
         const mtype: MoveType = if (is_cap) .Capture else .Promotion; // Actually simplified logic uses .Promotion type with piece set
         const pieces = [_]PieceType{ .Queen, .Knight, .Rook, .Bishop };
         for (pieces) |p| {
-            self.addMove(Move{ .from = .{ @intCast(fr), @intCast(fc) }, .to = .{ tr, tc }, .move_type = .Promotion, .promotion_piece = p });
+            self.addMove(Move{ .from = .{ @intCast(fr), @intCast(fc) }, .to = .{ tr, tc }, .piece = .Pawn, .move_type = .Promotion, .promotion_piece = p });
         }
         _ = mtype;
     }
@@ -413,9 +413,9 @@ pub const Game = struct {
             if (isInBounds(r, c)) {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target == null) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                    self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
                 } else if (target.?.color != self.turn) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
+                    self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
                 }
             }
         }
@@ -428,9 +428,9 @@ pub const Game = struct {
             if (isInBounds(r, c)) {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target == null) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
                 } else if (target.?.color != self.turn) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
                 }
             }
         }
@@ -439,29 +439,29 @@ pub const Game = struct {
         if (self.turn == .White) {
             if (self.castlingRights.white_king_side and self.board[7][5] == null and self.board[7][6] == null) {
                 if (!self.isSquareAttacked(.{ 7, 4 }, .Black) and !self.isSquareAttacked(.{ 7, 5 }, .Black) and !self.isSquareAttacked(.{ 7, 6 }, .Black)) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 6 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 6 }, .move_type = .Castling });
                 }
             }
             if (self.castlingRights.white_queen_side and self.board[7][1] == null and self.board[7][2] == null and self.board[7][3] == null) {
                 if (!self.isSquareAttacked(.{ 7, 4 }, .Black) and !self.isSquareAttacked(.{ 7, 3 }, .Black) and !self.isSquareAttacked(.{ 7, 2 }, .Black)) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 2 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 2 }, .move_type = .Castling });
                 }
             }
         } else {
             if (self.castlingRights.black_king_side and self.board[0][5] == null and self.board[0][6] == null) {
                 if (!self.isSquareAttacked(.{ 0, 4 }, .White) and !self.isSquareAttacked(.{ 0, 5 }, .White) and !self.isSquareAttacked(.{ 0, 6 }, .White)) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 6 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 6 }, .move_type = .Castling });
                 }
             }
             if (self.castlingRights.black_queen_side and self.board[0][1] == null and self.board[0][2] == null and self.board[0][3] == null) {
                 if (!self.isSquareAttacked(.{ 0, 4 }, .White) and !self.isSquareAttacked(.{ 0, 3 }, .White) and !self.isSquareAttacked(.{ 0, 2 }, .White)) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 2 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 2 }, .move_type = .Castling });
                 }
             }
         }
     }
 
-    fn genSliderMoves(self: *Game, row: usize, col: usize, dirs: []const Vec2) void {
+    fn genSliderMoves(self: *Game, row: usize, col: usize, dirs: []const Vec2, piece_type: PieceType) void {
         for (dirs) |dir| {
             var r = @as(i8, @intCast(row));
             var c = @as(i8, @intCast(col));
@@ -473,11 +473,11 @@ pub const Game = struct {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target) |piece| {
                     if (piece.color != self.turn) {
-                        self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
+                        self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
                     }
                     break;
                 }
-                self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
             }
         }
     }

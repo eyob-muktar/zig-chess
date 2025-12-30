@@ -20,6 +20,7 @@ pub const MoveType = enum(u3) {
 pub const Move = struct {
     from: [2]u8,
     to: [2]u8,
+    piece: PieceType,
     move_type: MoveType,
     promotion_piece: ?PieceType = null,
 };

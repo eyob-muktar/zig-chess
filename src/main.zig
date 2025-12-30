@@ -4,8 +4,12 @@ const types = @import("types.zig");
 const engine = @import("engine.zig");
 
 const BLOCK_SIZE = 100;
-const SCREEN_WIDTH = 800;
-const SCREEN_HEIGHT = 800;
+const BOARD_WIDTH = 800;
+const BOARD_HEIGHT = 800;
+const HISTORY_PANEL_WIDTH = 400;
+const SCREEN_WIDTH = BOARD_WIDTH + HISTORY_PANEL_WIDTH;
+const SCREEN_HEIGHT = BOARD_HEIGHT;
+const NOTATION_BOX_SIZE = 50;
 
 const UIInteractionState = enum {
     idle,
@@ -23,6 +27,7 @@ const UI = struct {
     pending_to: ?[2]u8,
 
     textures: std.AutoHashMap(types.Piece, rl.Texture2D),
+    font: rl.Font,
 
     pub fn init(allocator: std.mem.Allocator) !UI {
         return UI{
@@ -32,6 +37,7 @@ const UI = struct {
             .pending_from = null,
             .pending_to = null,
             .textures = std.AutoHashMap(types.Piece, rl.Texture2D).init(allocator),
+            .font = try rl.loadFontEx("assets/jetbrains-mono-v18-latin-regular.ttf", 48, null),
         };
     }
 
@@ -90,8 +96,10 @@ const UI = struct {
             if (rl.isKeyPressed(rl.KeyboardKey.r)) {
                 try self.game.loadFen(START_FEN);
                 try self.game.generateLegalMoves();
+                self.game.history.clearRetainingCapacity();
                 self.state = .idle;
                 self.selected_sq = null;
+                self.game.turn = .White;
                 return;
             }
         }
@@ -172,10 +180,12 @@ const UI = struct {
     }
 
     pub fn draw(self: *UI) void {
+        self.drawHistoryPanel();
         const history = self.game.history.getLastOrNull();
         for (0..8) |r| {
             for (0..8) |c| {
                 const color = if ((r + c) % 2 == 1) rl.Color.init(10, 110, 15, 255) else rl.Color.init(217, 217, 217, 255);
+                const text_color = if ((r + c) % 2 == 0) rl.Color.init(10, 110, 15, 255) else rl.Color.init(217, 217, 217, 255);
                 // rl.drawRectangleRounded(rl.Rectangle.init(@floatFromInt(c * BLOCK_SIZE), @floatFromInt(r * BLOCK_SIZE), BLOCK_SIZE, BLOCK_SIZE), 0.1, 1, color);
                 rl.drawRectangle(@intCast(c * BLOCK_SIZE), @intCast(r * BLOCK_SIZE), BLOCK_SIZE, BLOCK_SIZE, color);
 
@@ -216,6 +226,14 @@ const UI = struct {
                         rl.drawText(txt, @intCast(c * BLOCK_SIZE + 30), @intCast(r * BLOCK_SIZE + 20), 40, col);
                     }
                 }
+
+                // Draw numbers and letters notation on board
+                if (r == 7) {
+                    rl.drawTextCodepoint(self.font, @intCast(97 + c), rl.Vector2.init(@floatFromInt((c * BLOCK_SIZE) + BLOCK_SIZE - 15), @floatFromInt((r * BLOCK_SIZE) + BLOCK_SIZE - 20)), 24, text_color);
+                }
+                if (c == 0) {
+                    rl.drawTextCodepoint(self.font, @intCast(56 - r), rl.Vector2.init(@floatFromInt((c * BLOCK_SIZE) + 5), @floatFromInt((r * BLOCK_SIZE) + 5)), 24, text_color);
+                }
             }
         }
 
@@ -233,7 +251,7 @@ const UI = struct {
 
         if (self.state == .promoting) {
             // black overlay
-            rl.drawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.fade(rl.Color.black, 0.6));
+            rl.drawRectangle(0, 0, BOARD_WIDTH, BOARD_HEIGHT, rl.fade(rl.Color.black, 0.6));
 
             const start_x = @as(i32, @intCast(self.pending_to.?[1])) * BLOCK_SIZE; // the column the drawing begins. The same for the bg and the pieces
             const bg_row_offset: u8 = if (self.game.turn == types.Color.White) 0 else 4; // the row offset based on who's promoting
@@ -266,17 +284,17 @@ const UI = struct {
 
         if (self.game.status != .ongoing) {
             // black overlay
-            rl.drawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, rl.fade(rl.Color.black, 0.5));
+            rl.drawRectangle(0, 0, BOARD_WIDTH, BOARD_HEIGHT, rl.fade(rl.Color.black, 0.5));
 
             // message Box
             const msg = getEndGameMessage(self.game.status);
-            const fontSize = 40;
+            const fontSize = 48;
             const textWidth = @max(rl.measureText(msg[0..], fontSize), rl.measureText("Press 'R' to restart", 20));
 
             const boxW = @as(f32, @floatFromInt(textWidth)) + 60;
             const boxH = 120;
-            const boxX = @as(f32, (SCREEN_WIDTH - boxW) / 2);
-            const boxY = @as(f32, (SCREEN_HEIGHT - boxH) / 2);
+            const boxX = @as(f32, (BOARD_WIDTH - boxW) / 2);
+            const boxY = @as(f32, (BOARD_HEIGHT - boxH) / 2);
 
             // box Shadow
             rl.drawRectangleRec(rl.Rectangle{ .x = boxX + 5, .y = boxY + 5, .width = boxW, .height = boxH }, rl.fade(rl.Color.black, 0.3));
@@ -284,7 +302,8 @@ const UI = struct {
             rl.drawRectangleRec(rl.Rectangle{ .x = boxX, .y = boxY, .width = boxW, .height = boxH }, rl.Color.ray_white);
             rl.drawRectangleLinesEx(rl.Rectangle{ .x = boxX, .y = boxY, .width = boxW, .height = boxH }, 3, rl.Color.yellow);
 
-            rl.drawText(msg, @intFromFloat(boxX + 30), @intFromFloat(boxY + 30), fontSize, rl.Color.black);
+            rl.drawTextEx(self.font, msg, rl.Vector2.init(boxX + 30, boxY + 30), fontSize, 4, rl.Color.black);
+            // rl.drawText(msg, @intFromFloat(boxX + 30), @intFromFloat(boxY + 30), fontSize, rl.Color.black);
             rl.drawText("Press 'R' to restart", @intFromFloat(boxX + 30), @intFromFloat(boxY + 80), 20, rl.Color.black);
         }
     }
@@ -304,7 +323,101 @@ const UI = struct {
             .ongoing => "",
         };
     }
+
+    pub fn drawHistoryPanel(self: *UI) void {
+        const box_padding = 10;
+        const text_padding = 40;
+        rl.drawRectangle(BOARD_WIDTH + box_padding, 0 + box_padding, 400 - (box_padding * 2), BOARD_HEIGHT - (box_padding * 2), rl.Color.init(30, 30, 30, 255));
+
+        const history = self.game.history.items;
+        for (history, 0..) |entry, i| {
+            const col = i % 2;
+            // const color = if (row == 0) rl.Color.init(10, 110, 15, 255) else rl.Color.init(217, 217, 217, 255);
+            const fontSize = 24;
+            const text = formatMoveNotation(entry.move);
+
+            const boxH = 20;
+            const boxW = 400 - (text_padding * 5);
+            const boxX = (BOARD_WIDTH + text_padding) + (col * boxW);
+            const boxY = @as(f32, @floatFromInt(i - col)) * boxH;
+
+            if (col == 0 and i < 1000) {
+                // draw move number
+                // since we're counting for each color (i = 0 and i = 1 are both move number 1 for white and black respectively)
+                const move_number = (i / 2) + 1;
+                var buf: [5]u8 = undefined;
+                const str = std.fmt.bufPrintZ(&buf, "{d}:", .{move_number}) catch unreachable;
+
+                rl.drawTextEx(self.font, str, rl.Vector2.init(@floatFromInt(boxX), boxY + 20), fontSize, 1, rl.Color.white);
+            }
+            rl.drawTextEx(self.font, &text, rl.Vector2.init(@floatFromInt(boxX + text_padding), boxY + 20), fontSize, 2, rl.Color.white);
+        }
+    }
 };
+
+pub fn formatMoveNotation(move: types.Move) [6:0]u8 {
+    var buffer = [6:0]u8{ 0, 0, 0, 0, 0, 0 };
+    var i: usize = 0;
+    if (move.move_type == .Castling) {
+        buffer[i] = 'O';
+        i += 1;
+        buffer[i] = '-';
+        i += 1;
+        buffer[i] = 'O';
+        i += 1;
+
+        if (move.to[1] == 2) {
+            buffer[i] = '-';
+            i += 1;
+            buffer[i] = 'O';
+            i += 1;
+        }
+
+        return buffer;
+    }
+
+    if (move.piece != .Pawn) {
+        buffer[i] = switch (move.piece) {
+            .Knight => 'N',
+            .Bishop => 'B',
+            .Rook => 'R',
+            .Queen => 'Q',
+            .King => 'K',
+            else => '?',
+        };
+        i += 1;
+    }
+
+    if (move.move_type == .Capture) {
+        // Special case for pawns: "exd5"
+        if (move.piece == .Pawn) {
+            buffer[i] = @as(u8, 'a') + move.from[1]; // starting file
+            i += 1;
+        }
+        buffer[i] = 'x';
+        i += 1;
+    }
+
+    buffer[i] = @as(u8, 'a') + move.to[1]; // file
+    i += 1;
+    buffer[i] = @as(u8, '8') - move.to[0]; // rank
+    i += 1;
+
+    if (move.move_type == .Promotion) {
+        buffer[i] = '=';
+        i += 1;
+        buffer[i] = switch (move.promotion_piece.?) {
+            .Knight => 'N',
+            .Bishop => 'B',
+            .Rook => 'R',
+            .Queen => 'Q',
+            else => '?',
+        };
+        i += 1;
+    }
+
+    return buffer;
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -323,7 +436,7 @@ pub fn main() !void {
         try ui.update();
         rl.beginDrawing();
         defer rl.endDrawing();
-        rl.clearBackground(rl.Color.ray_white);
+        rl.clearBackground(rl.Color.dark_gray);
         ui.draw();
     }
 }
