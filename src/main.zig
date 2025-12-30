@@ -6,10 +6,13 @@ const engine = @import("engine.zig");
 const BLOCK_SIZE = 100;
 const BOARD_WIDTH = 800;
 const BOARD_HEIGHT = 800;
+const BOX_PADDING = 20;
 const HISTORY_PANEL_WIDTH = 400;
-const SCREEN_WIDTH = BOARD_WIDTH + HISTORY_PANEL_WIDTH;
+const HISTORY_PANEL_HEIGHT = BOARD_HEIGHT - (BOX_PADDING * 2);
+const SCREEN_WIDTH = BOARD_WIDTH + HISTORY_PANEL_WIDTH + (BOX_PADDING * 2);
 const SCREEN_HEIGHT = BOARD_HEIGHT;
 const NOTATION_BOX_SIZE = 50;
+const LINE_HEIGHT = 40;
 
 const UIInteractionState = enum {
     idle,
@@ -28,6 +31,7 @@ const UI = struct {
 
     textures: std.AutoHashMap(types.Piece, rl.Texture2D),
     font: rl.Font,
+    history_scroll: f32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !UI {
         return UI{
@@ -123,6 +127,10 @@ const UI = struct {
                         try self.game.switchTurn();
                         self.selected_sq = null;
                         self.state = .idle;
+                        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * LINE_HEIGHT;
+                        if (total_history_height > HISTORY_PANEL_HEIGHT - 40) {
+                            self.history_scroll = -(total_history_height - (HISTORY_PANEL_HEIGHT - 60));
+                        }
                     }
                     return;
                 }
@@ -325,32 +333,48 @@ const UI = struct {
     }
 
     pub fn drawHistoryPanel(self: *UI) void {
-        const box_padding = 10;
-        const text_padding = 40;
-        rl.drawRectangle(BOARD_WIDTH + box_padding, 0 + box_padding, 400 - (box_padding * 2), BOARD_HEIGHT - (box_padding * 2), rl.Color.init(30, 30, 30, 255));
-
         const history = self.game.history.items;
+
+        const text_padding = 50;
+        const history_panel_rect = rl.Rectangle{ .x = SCREEN_WIDTH - HISTORY_PANEL_WIDTH - BOX_PADDING, .y = 0 + BOX_PADDING, .width = HISTORY_PANEL_WIDTH, .height = HISTORY_PANEL_HEIGHT };
+        rl.drawRectangleRec(history_panel_rect, rl.Color.init(30, 30, 30, 255));
+
+        // scroll handler
+        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * LINE_HEIGHT;
+        const scroll_offset = total_history_height - HISTORY_PANEL_HEIGHT + 40;
+        const mouse_wheel = rl.getMouseWheelMove();
+        if (mouse_wheel != 0 and scroll_offset > 0) {
+            const scrolled = self.history_scroll + (mouse_wheel * 20);
+            // limit the scrolling to the top and bottom of history
+            if (@abs(scrolled) <= scroll_offset and scrolled < 20) {
+                self.history_scroll = scrolled;
+            }
+        }
+
+        rl.beginScissorMode(@intFromFloat(history_panel_rect.x), 0, HISTORY_PANEL_WIDTH, HISTORY_PANEL_HEIGHT);
+        defer rl.endScissorMode();
+        var y_offset: f32 = 20 + self.history_scroll;
+
         for (history, 0..) |entry, i| {
             const col = i % 2;
-            // const color = if (row == 0) rl.Color.init(10, 110, 15, 255) else rl.Color.init(217, 217, 217, 255);
             const fontSize = 24;
             const text = formatMoveNotation(entry.move);
 
-            const boxH = 20;
-            const boxW = 400 - (text_padding * 5);
-            const boxX = (BOARD_WIDTH + text_padding) + (col * boxW);
-            const boxY = @as(f32, @floatFromInt(i - col)) * boxH;
+            const x_pos = if (col == 0) history_panel_rect.x + text_padding else history_panel_rect.x + (4 * text_padding);
 
-            if (col == 0 and i < 1000) {
+            if (col == 0) {
                 // draw move number
                 // since we're counting for each color (i = 0 and i = 1 are both move number 1 for white and black respectively)
                 const move_number = (i / 2) + 1;
-                var buf: [5]u8 = undefined;
-                const str = std.fmt.bufPrintZ(&buf, "{d}:", .{move_number}) catch unreachable;
+                const num_text = rl.textFormat("%d.", .{move_number});
 
-                rl.drawTextEx(self.font, str, rl.Vector2.init(@floatFromInt(boxX), boxY + 20), fontSize, 1, rl.Color.white);
+                rl.drawTextEx(self.font, num_text, rl.Vector2.init(history_panel_rect.x + 10, y_offset), fontSize, 1, rl.Color.gray);
             }
-            rl.drawTextEx(self.font, &text, rl.Vector2.init(@floatFromInt(boxX + text_padding), boxY + 20), fontSize, 2, rl.Color.white);
+            rl.drawTextEx(self.font, &text, rl.Vector2.init(x_pos, y_offset), fontSize, 2, rl.Color.white);
+
+            if (col != 0) {
+                y_offset += LINE_HEIGHT;
+            }
         }
     }
 };
