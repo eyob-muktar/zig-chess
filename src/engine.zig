@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const evaluations = @import("evaluation.zig");
 
 const MoveType = types.MoveType;
 
@@ -101,7 +102,6 @@ pub const Game = struct {
         }
 
         if (iter.next()) |turn_str| {
-            std.debug.print("Turn: {s}\n", .{turn_str});
             self.turn = if (turn_str[0] == 'w') .White else .Black;
         }
 
@@ -135,14 +135,19 @@ pub const Game = struct {
 
     pub fn getGameStatus(self: *Game) GameStatus {
         if (self.move_count > 0) return .ongoing;
-
-        const king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
-        const attacker = if (self.turn == .White) .Black else .White;
-        if (self.isSquareAttacked(king_pos, attacker)) {
+        if (self.isInCheck()) {
             return .checkmate;
         } else {
             return .stalemate;
         }
+    }
+
+    pub fn reset(self: *Game) void {
+        self.board = [_][8]?Piece{[_]?Piece{null} ** 8} ** 8;
+        self.turn = .White;
+        self.castlingRights = CastlingRights{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true };
+        self.en_passant_pos = null;
+        self.history.clearRetainingCapacity();
     }
 
     pub fn switchTurn(self: *Game) !void {
@@ -150,7 +155,12 @@ pub const Game = struct {
         try self.generateLegalMoves();
     }
 
+    pub fn opponent(self: *Game) Color {
+        return if (self.turn == .White) .Black else .White;
+    }
+
     pub fn applyMove(self: *Game, move: Move) !void {
+        // std.debug.print("applied: {any} \n  castling rights: {any}\n", .{ move.move_type, self.castlingRights });
         var captured: ?Piece = null;
         if (move.move_type == .EnPassant) {
             captured = self.board[move.from[0]][move.to[1]]; // Capture the pawn behind
@@ -166,13 +176,12 @@ pub const Game = struct {
             .old_en_passant_pos = self.en_passant_pos,
             .old_king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos,
         };
-
-        const piece = self.board[move.from[0]][move.from[1]].?;
+        const piece = self.board[move.from[0]][move.from[1]];
         self.board[move.to[0]][move.to[1]] = piece;
         self.board[move.from[0]][move.from[1]] = null;
 
         // Update King Position
-        if (piece.type == .King) {
+        if (piece.?.type == .King) {
             if (self.turn == .White) self.white_king_pos = move.to else self.black_king_pos = move.to;
         }
 
@@ -202,6 +211,7 @@ pub const Game = struct {
         }
 
         self.updateCastlingRights(move);
+        // std.debug.print("applied: {any} \n  castling rights: {any}\n", .{ move.move_type, self.castlingRights });
         try self.history.append(self.allocator, entry);
     }
 
@@ -209,7 +219,11 @@ pub const Game = struct {
         const entry = self.history.pop();
 
         // Move piece back
-        const moved_piece_type = if (move.move_type == .Promotion) .Pawn else self.board[move.to[0]][move.to[1]].?.type;
+        // std.debug.print("undoing: {any}\n", .{move.move_type});
+        if (move.piece == .King and self.turn == .Black) {
+            // std.debug.print("Board of -----------------: {any} \n", .{self.board});
+        }
+        const moved_piece_type = if (move.move_type == .Promotion) .Pawn else move.piece;
         self.board[move.from[0]][move.from[1]] = Piece{ .type = moved_piece_type, .color = self.turn };
 
         // Clear destination (unless captured there)
@@ -245,8 +259,7 @@ pub const Game = struct {
         const row = move.from[0];
         const col = move.from[1];
 
-        // King moves
-        if (self.board[move.to[0]][move.to[1]].?.type == .King) {
+        if (move.move_type == .Castling) {
             if (self.turn == .White) {
                 self.castlingRights.white_king_side = false;
                 self.castlingRights.white_queen_side = false;
@@ -254,6 +267,21 @@ pub const Game = struct {
                 self.castlingRights.black_king_side = false;
                 self.castlingRights.black_queen_side = false;
             }
+            return;
+        }
+
+        // King moves
+        if (self.board[move.from[0]][move.from[1]]) |piece| {
+            if (piece.type == .King) {
+                if (self.turn == .White) {
+                    self.castlingRights.white_king_side = false;
+                    self.castlingRights.white_queen_side = false;
+                } else {
+                    self.castlingRights.black_king_side = false;
+                    self.castlingRights.black_queen_side = false;
+                }
+            }
+            return;
         }
 
         // If Rook moves or is captured
@@ -548,5 +576,66 @@ pub const Game = struct {
         }
 
         return false;
+    }
+
+    pub fn isInCheck(self: *Game) bool {
+        const king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
+        return self.isSquareAttacked(king_pos, self.opponent());
+    }
+
+    // Evaluations
+    pub fn getBestMove(self: *Game) !Move {
+        var best_move: Move = undefined;
+        var best_score: i32 = -500000;
+        var alpha: i32 = -500000;
+        const beta: i32 = 500000;
+
+        var root_moves: [256]Move = undefined;
+        @memcpy(root_moves[0..self.move_count], self.moves[0..self.move_count]);
+        const count = self.move_count;
+        for (root_moves[0..count]) |move| {
+            try self.applyMove(move);
+            try self.switchTurn();
+
+            const score: i32 = -try evaluations.negamax(self, 2, -beta, -alpha);
+
+            try self.switchTurn();
+            self.undoMove(move);
+
+            if (score > best_score) {
+                best_score = score;
+                best_move = move;
+            }
+            if (score > alpha) alpha = score;
+        }
+        return best_move;
+    }
+
+    pub fn evaluate(self: *Game) i32 {
+        var score: i32 = 0;
+        const material_weights = [_]i32{ 100, 300, 300, 500, 900, 20000 };
+
+        for (self.board, 0..) |row, row_idx| {
+            for (row, 0..) |piece, col_idx| {
+                if (piece) |p| {
+                    const pst_row = if (p.color == .Black) 7 - row_idx else row_idx;
+                    const pst_value = switch (p.type) {
+                        .Pawn => evaluations.PAWN_PST[pst_row][col_idx],
+                        .Knight => evaluations.KNIGHT_PST[pst_row][col_idx],
+                        .Bishop => evaluations.BISHOP_PST[pst_row][col_idx],
+                        .Rook => evaluations.ROOK_PST[pst_row][col_idx],
+                        .Queen => evaluations.QUEEN_PST[pst_row][col_idx],
+                        .King => evaluations.KING_MIDDLE_GAME_PST[pst_row][col_idx],
+                    };
+
+                    if (p.color == .White) {
+                        score += material_weights[@intFromEnum(p.type)] + pst_value;
+                    } else {
+                        score -= material_weights[@intFromEnum(p.type)] + pst_value;
+                    }
+                }
+            }
+        }
+        return score;
     }
 };

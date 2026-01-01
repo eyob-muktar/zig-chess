@@ -84,26 +84,36 @@ const UI = struct {
     pub fn update(self: *UI) !void {
         // Block interactions if game is over
         if (self.game.status == .ongoing) {
-            if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
-                const mouse = rl.getMousePosition();
-                const col = @divFloor(@as(i32, @intFromFloat(mouse.x)), BLOCK_SIZE);
-                const row = @divFloor(@as(i32, @intFromFloat(mouse.y)), BLOCK_SIZE);
+            if (self.game.turn == .Black) {
+                const best_move = try self.game.getBestMove();
+                if (best_move.from[0] == 170) {
+                    return;
+                }
+                try self.game.applyMove(best_move);
+                try self.game.switchTurn();
+                self.selected_sq = null;
+                self.state = .idle;
+            } else {
+                if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
+                    const mouse = rl.getMousePosition();
+                    const col = @divFloor(@as(i32, @intFromFloat(mouse.x)), BLOCK_SIZE);
+                    const row = @divFloor(@as(i32, @intFromFloat(mouse.y)), BLOCK_SIZE);
 
-                const engine_row = row;
+                    const engine_row = row;
 
-                if (engine_row >= 0 and engine_row < 8 and col >= 0 and col < 8) {
-                    try self.handleBoardClick(@intCast(engine_row), @intCast(col));
+                    if (engine_row >= 0 and engine_row < 8 and col >= 0 and col < 8) {
+                        try self.handleBoardClick(@intCast(engine_row), @intCast(col));
+                    }
                 }
             }
         } else {
             // Restart logic
             if (rl.isKeyPressed(rl.KeyboardKey.r)) {
+                self.game.reset();
                 try self.game.loadFen(START_FEN);
                 try self.game.generateLegalMoves();
-                self.game.history.clearRetainingCapacity();
                 self.state = .idle;
                 self.selected_sq = null;
-                self.game.turn = .White;
                 return;
             }
         }
@@ -313,6 +323,13 @@ const UI = struct {
             rl.drawTextEx(self.font, msg, rl.Vector2.init(boxX + 30, boxY + 30), fontSize, 4, rl.Color.black);
             // rl.drawText(msg, @intFromFloat(boxX + 30), @intFromFloat(boxY + 30), fontSize, rl.Color.black);
             rl.drawText("Press 'R' to restart", @intFromFloat(boxX + 30), @intFromFloat(boxY + 80), 20, rl.Color.black);
+        }
+
+        if (self.game.isInCheck()) {
+            const king_pos = if (self.game.turn == .White) self.game.white_king_pos else self.game.black_king_pos;
+            const x: i32 = @as(i32, king_pos[1]) * BLOCK_SIZE;
+            const y: i32 = @as(i32, king_pos[0]) * BLOCK_SIZE;
+            rl.drawRectangle(x, y, BLOCK_SIZE, BLOCK_SIZE, rl.fade(rl.Color.red, 0.5));
         }
     }
 

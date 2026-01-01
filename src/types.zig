@@ -1,5 +1,3 @@
-const std = @import("std");
-
 pub const Color = enum { White, Black };
 pub const PieceType = enum { Pawn, Knight, Bishop, Rook, Queen, King };
 
