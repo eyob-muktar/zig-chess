@@ -97,6 +97,7 @@ test "Apply and Undo Move" {
         .from = .{ 1, 4 },
         .to = .{ 3, 4 },
         .move_type = .DoublePawnPush,
+        .piece = .Pawn,
     };
 
     try game.applyMove(move);
@@ -267,7 +268,7 @@ pub fn perftDivide(game: *engine.Game, depth: u32) !void {
 
 fn printMove(move: types.Move) void {
     const files = "abcdefgh";
-    const ranks = "12345678"; // Adjusted for 0-indexed top-down board
+    const ranks = "87654321"; // Adjusted for 0-indexed top-down board
 
     std.debug.print("{c}{c}{c}{c}", .{
         files[move.from[1]],

@@ -276,7 +276,6 @@ pub const Game = struct {
                     self.castlingRights.black_queen_side = false;
                 }
             }
-            return;
         }
 
         // If Rook moves or is captured
@@ -597,7 +596,7 @@ pub const Game = struct {
             try self.applyMove(move);
             try self.switchTurn();
 
-            const score: i32 = -try evaluations.negamax(self, &searchContext, 3, 1, -beta, -alpha);
+            const score: i32 = -try evaluations.negamax(self, &searchContext, 4, 1, -beta, -alpha);
 
             try self.switchTurn();
             self.undoMove(move);
