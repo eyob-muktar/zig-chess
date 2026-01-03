@@ -266,7 +266,7 @@ pub const Game = struct {
         }
 
         // King moves
-        if (self.board[move.from[0]][move.from[1]]) |piece| {
+        if (self.board[move.to[0]][move.to[1]]) |piece| {
             if (piece.type == .King) {
                 if (self.turn == .White) {
                     self.castlingRights.white_king_side = false;

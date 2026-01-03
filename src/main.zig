@@ -95,7 +95,6 @@ const UI = struct {
                     return;
                 }
 
-                std.debug.print("\n {any} \n {any} \n \n", .{ best_move, self.game.castlingRights });
                 try self.game.applyMove(best_move);
                 try self.game.switchTurn();
                 self.selected_sq = null;
