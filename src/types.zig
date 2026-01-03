@@ -21,6 +21,7 @@ pub const Move = struct {
     piece: PieceType,
     move_type: MoveType,
     promotion_piece: ?PieceType = null,
+    captured_piece: ?PieceType = null,
 };
 
 pub const CastlingRights = packed struct(u4) {
@@ -31,3 +32,6 @@ pub const CastlingRights = packed struct(u4) {
 };
 
 pub const GameStatus = enum { ongoing, white_wins, black_wins, draw };
+
+pub const PlayerType = enum { Human, Computer };
+pub const GameStage = enum { Opening, Midgame, Endgame };

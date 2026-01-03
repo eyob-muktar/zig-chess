@@ -32,6 +32,8 @@ const UI = struct {
     textures: std.AutoHashMap(types.Piece, rl.Texture2D),
     font: rl.Font,
     history_scroll: f32 = 0,
+    white_player: types.PlayerType,
+    black_player: types.PlayerType,
 
     pub fn init(allocator: std.mem.Allocator) !UI {
         return UI{
@@ -42,6 +44,8 @@ const UI = struct {
             .pending_to = null,
             .textures = std.AutoHashMap(types.Piece, rl.Texture2D).init(allocator),
             .font = try rl.loadFontEx("assets/jetbrains-mono-v18-latin-regular.ttf", 48, null),
+            .white_player = .Human,
+            .black_player = .Computer,
         };
     }
 
@@ -84,11 +88,14 @@ const UI = struct {
     pub fn update(self: *UI) !void {
         // Block interactions if game is over
         if (self.game.status == .ongoing) {
-            if (self.game.turn == .Black) {
+            const is_computer_turn = self.game.turn == .White and self.white_player == .Computer or self.game.turn == .Black and self.black_player == .Computer;
+            if (is_computer_turn) {
                 const best_move = try self.game.getBestMove();
                 if (best_move.from[0] == 170) {
                     return;
                 }
+
+                std.debug.print("\n {any} \n {any} \n \n", .{ best_move, self.game.castlingRights });
                 try self.game.applyMove(best_move);
                 try self.game.switchTurn();
                 self.selected_sq = null;

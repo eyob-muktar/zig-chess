@@ -160,7 +160,6 @@ pub const Game = struct {
     }
 
     pub fn applyMove(self: *Game, move: Move) !void {
-        // std.debug.print("applied: {any} \n  castling rights: {any}\n", .{ move.move_type, self.castlingRights });
         var captured: ?Piece = null;
         if (move.move_type == .EnPassant) {
             captured = self.board[move.from[0]][move.to[1]]; // Capture the pawn behind
@@ -211,7 +210,6 @@ pub const Game = struct {
         }
 
         self.updateCastlingRights(move);
-        // std.debug.print("applied: {any} \n  castling rights: {any}\n", .{ move.move_type, self.castlingRights });
         try self.history.append(self.allocator, entry);
     }
 
@@ -219,10 +217,7 @@ pub const Game = struct {
         const entry = self.history.pop();
 
         // Move piece back
-        // std.debug.print("undoing: {any}\n", .{move.move_type});
-        if (move.piece == .King and self.turn == .Black) {
-            // std.debug.print("Board of -----------------: {any} \n", .{self.board});
-        }
+        if (move.piece == .King and self.turn == .Black) {}
         const moved_piece_type = if (move.move_type == .Promotion) .Pawn else move.piece;
         self.board[move.from[0]][move.from[1]] = Piece{ .type = moved_piece_type, .color = self.turn };
 
@@ -231,7 +226,7 @@ pub const Game = struct {
 
         // Restore captured piece
         if (move.move_type == .EnPassant) {
-            // Restore pawn at the EP capture location
+            // Restore pawn at the EP position
             self.board[move.from[0]][move.to[1]] = entry.?.captured_piece;
         } else if (entry.?.captured_piece) |cap| {
             self.board[move.to[0]][move.to[1]] = cap;
@@ -391,7 +386,7 @@ pub const Game = struct {
         // Normal
         if (self.board[@intCast(r)][@intCast(c)] == null) {
             if (r == promotion_row) {
-                self.addPromotionMoves(row, col, @intCast(r), @intCast(c), false);
+                self.addPromotionMoves(row, col, @intCast(r), @intCast(c), false, null);
             } else {
                 self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal, .piece = .Pawn });
                 // Double Push
@@ -409,9 +404,9 @@ pub const Game = struct {
                 if (self.board[@intCast(r)][@intCast(cc)]) |target| {
                     if (target.color != self.turn) {
                         if (r == promotion_row) {
-                            self.addPromotionMoves(row, col, @intCast(r), @intCast(cc), true);
+                            self.addPromotionMoves(row, col, @intCast(r), @intCast(cc), true, target.type);
                         } else {
-                            self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .Capture });
+                            self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .Capture, .captured_piece = target.type });
                         }
                     }
                 }
@@ -425,11 +420,11 @@ pub const Game = struct {
         }
     }
 
-    fn addPromotionMoves(self: *Game, fr: usize, fc: usize, tr: u8, tc: u8, is_cap: bool) void {
+    fn addPromotionMoves(self: *Game, fr: usize, fc: usize, tr: u8, tc: u8, is_cap: bool, captured_piece: ?PieceType) void {
         const mtype: MoveType = if (is_cap) .Capture else .Promotion; // Actually simplified logic uses .Promotion type with piece set
         const pieces = [_]PieceType{ .Queen, .Knight, .Rook, .Bishop };
         for (pieces) |p| {
-            self.addMove(Move{ .from = .{ @intCast(fr), @intCast(fc) }, .to = .{ tr, tc }, .piece = .Pawn, .move_type = .Promotion, .promotion_piece = p });
+            self.addMove(Move{ .from = .{ @intCast(fr), @intCast(fc) }, .to = .{ tr, tc }, .piece = .Pawn, .move_type = .Promotion, .promotion_piece = p, .captured_piece = captured_piece });
         }
         _ = mtype;
     }
@@ -440,10 +435,12 @@ pub const Game = struct {
             const c = @as(i8, @intCast(col)) + dir.col;
             if (isInBounds(r, c)) {
                 const target = self.board[@intCast(r)][@intCast(c)];
-                if (target == null) {
+                if (target) |nonull_target| {
+                    if (nonull_target.color != self.turn) {
+                        self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = nonull_target.type });
+                    }
+                } else {
                     self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
-                } else if (target.?.color != self.turn) {
-                    self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
                 }
             }
         }
@@ -455,10 +452,12 @@ pub const Game = struct {
             const c = @as(i8, @intCast(col)) + dir.col;
             if (isInBounds(r, c)) {
                 const target = self.board[@intCast(r)][@intCast(c)];
-                if (target == null) {
+                if (target) |nonull_target| {
+                    if (nonull_target.color != self.turn) {
+                        self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = nonull_target.type });
+                    }
+                } else {
                     self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
-                } else if (target.?.color != self.turn) {
-                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
                 }
             }
         }
@@ -501,7 +500,7 @@ pub const Game = struct {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target) |piece| {
                     if (piece.color != self.turn) {
-                        self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture });
+                        self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = piece.type });
                     }
                     break;
                 }
@@ -589,6 +588,7 @@ pub const Game = struct {
         var best_score: i32 = -500000;
         var alpha: i32 = -500000;
         const beta: i32 = 500000;
+        var searchContext = evaluations.SearchContext.init();
 
         var root_moves: [256]Move = undefined;
         @memcpy(root_moves[0..self.move_count], self.moves[0..self.move_count]);
@@ -597,7 +597,7 @@ pub const Game = struct {
             try self.applyMove(move);
             try self.switchTurn();
 
-            const score: i32 = -try evaluations.negamax(self, 2, -beta, -alpha);
+            const score: i32 = -try evaluations.negamax(self, &searchContext, 3, 1, -beta, -alpha);
 
             try self.switchTurn();
             self.undoMove(move);
@@ -611,9 +611,21 @@ pub const Game = struct {
         return best_move;
     }
 
+    pub fn getGameStage(self: *Game) types.GameStage {
+        if (self.history.items.len < 15) {
+            return .Opening;
+        } else if (self.history.items.len < 40) {
+            return .Midgame;
+        } else {
+            return .Endgame;
+        }
+    }
+
     pub fn evaluate(self: *Game) i32 {
         var score: i32 = 0;
         const material_weights = [_]i32{ 100, 300, 300, 500, 900, 20000 };
+
+        const game_stage = self.getGameStage();
 
         for (self.board, 0..) |row, row_idx| {
             for (row, 0..) |piece, col_idx| {
@@ -625,7 +637,7 @@ pub const Game = struct {
                         .Bishop => evaluations.BISHOP_PST[pst_row][col_idx],
                         .Rook => evaluations.ROOK_PST[pst_row][col_idx],
                         .Queen => evaluations.QUEEN_PST[pst_row][col_idx],
-                        .King => evaluations.KING_MIDDLE_GAME_PST[pst_row][col_idx],
+                        .King => if (game_stage == .Endgame) evaluations.KING_END_GAME_PST[pst_row][col_idx] else evaluations.KING_MIDDLE_GAME_PST[pst_row][col_idx],
                     };
 
                     if (p.color == .White) {
