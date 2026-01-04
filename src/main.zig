@@ -14,12 +14,19 @@ const SCREEN_HEIGHT = BOARD_HEIGHT;
 const NOTATION_BOX_SIZE = 50;
 const LINE_HEIGHT = 40;
 
+pub const PlayerAction = union(enum) {
+    none,
+    make_move: types.Move,
+    reset_game,
+};
+
 const UIInteractionState = enum {
     idle,
     dragging_piece,
     promoting,
 };
-const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+const START_FEN = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1";
+// "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
 const UI = struct {
     game: engine.Game,
@@ -45,7 +52,7 @@ const UI = struct {
             .textures = std.AutoHashMap(types.Piece, rl.Texture2D).init(allocator),
             .font = try rl.loadFontEx("assets/jetbrains-mono-v18-latin-regular.ttf", 48, null),
             .white_player = .Human,
-            .black_player = .Computer,
+            .black_player = .Human,
         };
     }
 
@@ -85,20 +92,16 @@ const UI = struct {
         try self.textures.put(types.Piece{ .type = .Knight, .color = .White }, wn_texture);
     }
 
-    pub fn update(self: *UI) !void {
+    pub fn update(self: *UI, moves: []const types.Move) !PlayerAction {
         // Block interactions if game is over
         if (self.game.status == .ongoing) {
             const is_computer_turn = self.game.turn == .White and self.white_player == .Computer or self.game.turn == .Black and self.black_player == .Computer;
             if (is_computer_turn) {
                 const best_move = try self.game.getBestMove();
                 if (best_move.from[0] == 170) {
-                    return;
+                    return .none;
                 }
-
-                try self.game.applyMove(best_move);
-                try self.game.switchTurn();
-                self.selected_sq = null;
-                self.state = .idle;
+                return .{ .make_move = best_move };
             } else {
                 if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
                     const mouse = rl.getMousePosition();
@@ -108,29 +111,27 @@ const UI = struct {
                     const engine_row = row;
 
                     if (engine_row >= 0 and engine_row < 8 and col >= 0 and col < 8) {
-                        try self.handleBoardClick(@intCast(engine_row), @intCast(col));
+                        const move = try self.handleBoardClick(@intCast(engine_row), @intCast(col), moves);
+                        if (move) |m| {
+                            return .{ .make_move = m };
+                        }
                     }
                 }
             }
         } else {
             // Restart logic
             if (rl.isKeyPressed(rl.KeyboardKey.r)) {
-                self.game.reset();
-                try self.game.loadFen(START_FEN);
-                try self.game.generateLegalMoves();
-                self.state = .idle;
-                self.selected_sq = null;
-                return;
+                return .reset_game;
             }
         }
+        return .none;
     }
 
-    fn handleBoardClick(self: *UI, row: u8, col: u8) !void {
+    fn handleBoardClick(self: *UI, row: u8, col: u8, moves: []const types.Move) !?types.Move {
         if (self.state == .promoting) {
-            try self.handlePromotion(row, col);
+            return try self.handlePromotion(row, col, moves);
         } else if (self.selected_sq) |sel| {
-            for (0..self.game.move_count) |i| {
-                const move = self.game.moves[i];
+            for (moves[0..]) |move| {
                 if (move.from[0] == sel[0] and move.from[1] == sel[1] and
                     move.to[0] == row and move.to[1] == col)
                 {
@@ -139,16 +140,8 @@ const UI = struct {
                         self.pending_from = sel;
                         self.pending_to = .{ row, col };
                     } else {
-                        try self.game.applyMove(move);
-                        try self.game.switchTurn();
-                        self.selected_sq = null;
-                        self.state = .idle;
-                        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * LINE_HEIGHT;
-                        if (total_history_height > HISTORY_PANEL_HEIGHT - 40) {
-                            self.history_scroll = -(total_history_height - (HISTORY_PANEL_HEIGHT - 60));
-                        }
+                        return move;
                     }
-                    return;
                 }
             }
             // If invalid move, select new piece
@@ -165,15 +158,16 @@ const UI = struct {
                 self.state = .dragging_piece;
             }
         }
+        return null;
     }
 
-    fn handlePromotion(self: *UI, clicked_row: u8, clicked_col: u8) !void {
+    fn handlePromotion(self: *UI, clicked_row: u8, clicked_col: u8, moves: []const types.Move) !?types.Move {
         const from = self.pending_from;
         const to = self.pending_to;
 
         if (from == null or to == null or clicked_row < 0 or clicked_col > 7 or clicked_col != to.?[1] or (self.game.turn == .White and clicked_row > 3) or (self.game.turn == .Black and clicked_row < 4)) {
             self.state = .idle;
-            return;
+            return null;
         }
 
         const clicked_piece = switch (clicked_row) {
@@ -184,7 +178,7 @@ const UI = struct {
             else => types.PieceType.Queen,
         };
 
-        for (self.game.moves[0..self.game.move_count]) |move| {
+        for (moves[0..]) |move| {
             if (move.promotion_piece) |piece| {
                 if (move.from[0] == from.?[0] and
                     move.from[1] == from.?[1] and
@@ -193,17 +187,14 @@ const UI = struct {
                     move.move_type == .Promotion and
                     piece == clicked_piece)
                 {
-                    try self.game.applyMove(move);
-                    try self.game.switchTurn();
-                    self.state = .idle;
-                    self.selected_sq = null;
-                    return;
+                    return move;
                 }
             }
         }
+        return null;
     }
 
-    pub fn draw(self: *UI) void {
+    pub fn draw(self: *UI, moves: []const types.Move) void {
         self.drawHistoryPanel();
         const history = self.game.history.getLastOrNull();
         for (0..8) |r| {
@@ -262,8 +253,7 @@ const UI = struct {
         }
 
         if (self.selected_sq) |sel| {
-            for (0..self.game.move_count) |i| {
-                const move = self.game.moves[i];
+            for (moves[0..]) |move| {
                 if (move.from[0] == sel[0] and move.from[1] == sel[1]) {
                     const r = move.to[0];
                     const cx = @as(i32, @intCast(move.to[1])) * BLOCK_SIZE + BLOCK_SIZE / 2;
@@ -400,6 +390,20 @@ const UI = struct {
             }
         }
     }
+
+    pub fn updateHistoryScroll(self: *UI) void {
+        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * LINE_HEIGHT;
+        if (total_history_height > HISTORY_PANEL_HEIGHT - 40) {
+            self.history_scroll = -(total_history_height - (HISTORY_PANEL_HEIGHT - 60));
+        }
+    }
+
+    pub fn uiReset(self: *UI) void {
+        self.state = .idle;
+        self.selected_sq = null;
+        self.pending_from = null;
+        self.pending_to = null;
+    }
 };
 
 pub fn formatMoveNotation(move: types.Move) [6:0]u8 {
@@ -479,11 +483,38 @@ pub fn main() !void {
     defer ui.deinit();
     try ui.loadAssets();
 
+    var moves: [218]types.Move = undefined;
+    var moves_count: usize = 0;
+    moves_count = ui.game.generateLegalMoves(&moves);
+
     while (!rl.windowShouldClose()) {
-        try ui.update();
+        const player_action = try ui.update(moves[0..moves_count]);
+        switch (player_action) {
+            .make_move => |move| {
+                try ui.game.applyMove(move);
+                ui.game.switchTurn();
+                ui.uiReset();
+
+                ui.updateHistoryScroll();
+
+                moves_count = ui.game.generateLegalMoves(&moves);
+                ui.game.updateStatus(moves_count);
+            },
+            .reset_game => {
+                ui.game.reset();
+                ui.uiReset();
+                ui.history_scroll = 0;
+                try ui.game.loadFen(START_FEN);
+
+                moves_count = ui.game.generateLegalMoves(&moves);
+            },
+            .none => {},
+        }
+        std.debug.print("\n {d}", .{moves_count});
+
         rl.beginDrawing();
         defer rl.endDrawing();
         rl.clearBackground(rl.Color.dark_gray);
-        ui.draw();
+        ui.draw(moves[0..moves_count]);
     }
 }

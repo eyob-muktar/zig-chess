@@ -55,7 +55,7 @@ test "FEN Loading and Turn Switching" {
     try expect(game.board[7][4].?.type == .King);
 
     // Switch turn
-    try game.switchTurn();
+    game.switchTurn();
     try expect(game.turn == .Black);
 }
 
@@ -65,14 +65,14 @@ test "Pawn Movement (Single, Double, Capture)" {
     defer game.deinit();
 
     game.turn = .White;
-    try game.generateLegalMoves();
+    var moves: [218]types.Move = undefined;
+    const count = game.generateLegalMoves(&moves);
 
     var found_single = false;
     var found_double = false;
     var found_capture = false;
 
-    for (0..game.move_count) |i| {
-        const m = game.moves[i];
+    for (moves[0..count]) |m| {
         if (m.from[0] == 6 and m.from[1] == 4) {
             if (m.to[0] == 5 and m.to[1] == 4) found_single = true;
             if (m.to[0] == 4 and m.to[1] == 4) found_double = true;
@@ -126,7 +126,8 @@ test "Check Detection and Illegal Moves" {
     defer game.deinit();
 
     game.turn = .White;
-    try game.generateLegalMoves();
+    var moves: [218]types.Move = undefined;
+    const count = game.generateLegalMoves(&moves);
 
     // King moves:
     // D1 (7,3) - Safe
@@ -135,8 +136,7 @@ test "Check Detection and Illegal Moves" {
     // E2 (6,4) - ILLEGAL (File E is attacked by Rook)
     // F2 (6,5) - Safe
 
-    for (0..game.move_count) |i| {
-        const m = game.moves[i];
+    for (moves[0..count]) |m| {
         if (m.from[0] == 0 and m.from[1] == 4) {
             // Assert we NEVER generate a move to (1,4)
             const is_e2 = (m.to[0] == 6 and m.to[1] == 4);
@@ -156,11 +156,11 @@ test "Castling Rights" {
     try expect(game.board[7][7] != null);
     try expect(game.castlingRights.white_king_side == true);
 
-    try game.generateLegalMoves();
+    var moves: [218]types.Move = undefined;
+    const count = game.generateLegalMoves(&moves);
 
     var can_castle = false;
-    for (0..game.move_count) |i| {
-        const m = game.moves[i];
+    for (moves[0..count]) |m| {
         if (m.move_type == .Castling and m.to[1] == 6) {
             can_castle = true;
         }
@@ -191,25 +191,21 @@ fn perft(game: *engine.Game, depth: u32) !PerftResults {
 
     var total_results = PerftResults{};
 
-    _ = try game.generateLegalMoves();
+    var moves: [218]types.Move = undefined;
+    const count = game.generateLegalMoves(&moves);
 
-    // Copy moves to local stack to avoid recursion corruption
-    var local_moves: [218]types.Move = undefined;
-    const count = game.move_count;
-    @memcpy(local_moves[0..count], game.moves[0..count]);
-
-    for (local_moves[0..count]) |move| {
+    for (moves[0..count]) |move| {
         const is_capture = move.move_type == .Capture or move.move_type == .EnPassant;
         const is_ep = move.move_type == .EnPassant;
         const is_castle = move.move_type == .Castling;
         const is_promo = move.move_type == .Promotion;
 
         try game.applyMove(move);
+        game.switchTurn();
         // if (history.captured_piece != null) {
         //     // std.debug.print("Move: {any}\n", .{nonull_history_captured_piece});
         //     is_capture = true;
         // }
-        try game.switchTurn();
 
         const branch_results = try perft(game, depth - 1);
 
@@ -224,7 +220,7 @@ fn perft(game: *engine.Game, depth: u32) !PerftResults {
             total_results.add(branch_results);
         }
 
-        try game.switchTurn();
+        game.switchTurn();
         game.undoMove(move);
     }
 
@@ -239,17 +235,14 @@ pub fn perftDivide(game: *engine.Game, depth: u32) !void {
 
     var total_nodes: u64 = 0;
 
-    _ = try game.generateLegalMoves();
-
-    // Copy to local stack (to avoid recursion corruption)
-    var root_moves: [218]types.Move = undefined;
-    @memcpy(root_moves[0..game.move_count], game.moves[0..game.move_count]);
+    var moves: [218]types.Move = undefined;
+    const count = game.generateLegalMoves(&moves);
 
     std.debug.print("\n--- Perft Divide Depth {d} ---\n", .{depth});
 
-    for (root_moves[0..game.move_count]) |move| {
+    for (moves[0..count]) |move| {
         try game.applyMove(move);
-        try game.switchTurn();
+        game.switchTurn();
 
         const nodes_from_move = try perft(game, depth - 1);
 
@@ -258,7 +251,7 @@ pub fn perftDivide(game: *engine.Game, depth: u32) !void {
         printMove(move);
         std.debug.print(": {d}\n", .{nodes_from_move.nodes});
 
-        try game.switchTurn();
+        game.switchTurn();
         game.undoMove(move);
     }
 
@@ -292,7 +285,7 @@ test "Chess Move Generation - Initial Position" {
     var game = try engine.Game.init(allocator, "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1");
     defer game.deinit();
 
-    // try perftDivide(&game, 1);
+    // try perftDivide(&game, 2);
 
     const result1 = try perft(&game, 1);
     const result2 = try perft(&game, 2);

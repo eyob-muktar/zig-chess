@@ -38,8 +38,6 @@ pub const Game = struct {
     allocator: std.mem.Allocator,
     history: std.ArrayList(HistoryEntry),
 
-    moves: [256]Move = undefined,
-    move_count: usize = 0,
     status: GameStatus = .ongoing,
 
     pub fn init(allocator: std.mem.Allocator, fen: []const u8) !Game {
@@ -54,7 +52,7 @@ pub const Game = struct {
             .castlingRights = .{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true },
         };
         try self.loadFen(fen);
-        try self.generateLegalMoves();
+
         return self;
     }
 
@@ -133,26 +131,27 @@ pub const Game = struct {
         }
     }
 
-    pub fn getGameStatus(self: *Game) GameStatus {
-        if (self.move_count > 0) return .ongoing;
-        if (self.isInCheck()) {
-            return .checkmate;
-        } else {
-            return .stalemate;
+    pub fn updateStatus(self: *Game, count: usize) void {
+        if (count == 0) {
+            if (self.isInCheck()) {
+                self.status = if (self.turn == .White) .black_wins else .white_wins;
+            } else {
+                self.status = .draw;
+            }
         }
     }
 
     pub fn reset(self: *Game) void {
         self.board = [_][8]?Piece{[_]?Piece{null} ** 8} ** 8;
         self.turn = .White;
+        self.status = .ongoing;
         self.castlingRights = CastlingRights{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true };
         self.en_passant_pos = null;
         self.history.clearRetainingCapacity();
     }
 
-    pub fn switchTurn(self: *Game) !void {
+    pub fn switchTurn(self: *Game) void {
         self.turn = if (self.turn == .White) .Black else .White;
-        try self.generateLegalMoves();
     }
 
     pub fn opponent(self: *Game) Color {
@@ -211,6 +210,7 @@ pub const Game = struct {
 
         self.updateCastlingRights(move);
         try self.history.append(self.allocator, entry);
+        // self.switchTurn();
     }
 
     pub fn undoMove(self: *Game, move: Move) void {
@@ -248,6 +248,8 @@ pub const Game = struct {
         self.castlingRights = entry.?.old_castling_rights;
         self.en_passant_pos = entry.?.old_en_passant_pos;
         if (self.turn == .White) self.white_king_pos = entry.?.old_king_pos else self.black_king_pos = entry.?.old_king_pos;
+
+        // self.switchTurn();
     }
 
     fn updateCastlingRights(self: *Game, move: Move) void {
@@ -286,83 +288,41 @@ pub const Game = struct {
     }
 
     // Move Generator functions
-    pub fn generateLegalMoves(self: *Game) !void {
-        self.move_count = 0;
+    pub fn generateLegalMoves(self: *Game, buffer: []Move) usize {
+        var total: usize = 0;
         for (0..8) |r| {
             for (0..8) |c| {
                 if (self.board[r][c]) |piece| {
                     if (piece.color == self.turn) {
                         switch (piece.type) {
-                            .Pawn => self.getPawnMoves(r, c),
-                            .King => self.getKingMoves(r, c),
-                            .Knight => self.genKnightMoves(r, c),
-                            .Bishop => self.genSliderMoves(r, c, &bishop_dirs, .Bishop),
-                            .Rook => self.genSliderMoves(r, c, &rook_dirs, .Rook),
-                            .Queen => self.genSliderMoves(r, c, &queen_dirs, .Queen),
+                            .Pawn => self.getPawnMoves(r, c, buffer[0..], &total),
+                            .King => self.getKingMoves(r, c, buffer[0..], &total),
+                            .Knight => self.genKnightMoves(r, c, buffer[0..], &total),
+                            .Bishop => self.genSliderMoves(r, c, &bishop_dirs, .Bishop, buffer[0..], &total),
+                            .Rook => self.genSliderMoves(r, c, &rook_dirs, .Rook, buffer[0..], &total),
+                            .Queen => self.genSliderMoves(r, c, &queen_dirs, .Queen, buffer[0..], &total),
                         }
                     }
                 }
             }
         }
-
-        // Filter illegal moves (moving into check)
-        var legal_count: usize = 0;
-        for (0..self.move_count) |i| {
-            const move = self.moves[i];
-
-            var captured: ?Piece = null;
-            if (move.move_type == .EnPassant) {
-                captured = self.board[move.from[0]][move.to[1]];
-                self.board[move.from[0]][move.to[1]] = null;
-            } else {
-                captured = self.board[move.to[0]][move.to[1]];
-            }
-            const moved_piece = self.board[move.from[0]][move.from[1]];
-            self.board[move.to[0]][move.to[1]] = moved_piece;
-            self.board[move.from[0]][move.from[1]] = null;
-
-            const old_king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
-            if (moved_piece.?.type == .King) {
-                if (self.turn == .White) self.white_king_pos = move.to else self.black_king_pos = move.to;
-            }
-
-            // Check
-            const king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
-            const in_check = self.isSquareAttacked(king_pos, if (self.turn == .White) .Black else .White);
-
-            if (moved_piece.?.type == .King) {
-                if (self.turn == .White) self.white_king_pos = old_king_pos else self.black_king_pos = old_king_pos;
-            }
-            self.board[move.from[0]][move.from[1]] = moved_piece;
-            self.board[move.to[0]][move.to[1]] = null;
-            if (move.move_type == .EnPassant) self.board[move.from[0]][move.to[1]] = captured else self.board[move.to[0]][move.to[1]] = captured;
-
-            if (!in_check) {
-                self.moves[legal_count] = move;
-                legal_count += 1;
-            }
-        }
-        self.move_count = legal_count;
-
-        // update game status
-        if (self.move_count == 0) {
-            const king_pos = if (self.turn == .White) self.white_king_pos else self.black_king_pos;
-            const in_check = self.isSquareAttacked(king_pos, if (self.turn == .White) .Black else .White);
-
-            if (in_check) {
-                self.status = if (self.turn == .White) .black_wins else .white_wins;
-            } else {
-                self.status = .draw;
-            }
-        } else {
-            self.status = .ongoing;
-        }
+        return total;
     }
 
-    fn addMove(self: *Game, move: Move) void {
-        if (self.move_count < self.moves.len) {
-            self.moves[self.move_count] = move;
-            self.move_count += 1;
+    fn isLegalMove(self: *Game, move: Move) !bool {
+        try self.applyMove(move);
+        const in_check = self.isInCheck();
+        self.undoMove(move);
+
+        if (in_check) return false;
+        return true;
+    }
+
+    fn addMove(self: *Game, move: Move, buffer: []Move, count: *usize) void {
+        const isLegal = self.isLegalMove(move) catch false;
+        if (isLegal) {
+            buffer[count.*] = move;
+            count.* += 1;
         }
     }
 
@@ -370,7 +330,7 @@ pub const Game = struct {
         return r >= 0 and r < 8 and c >= 0 and c < 8;
     }
 
-    fn getPawnMoves(self: *Game, row: usize, col: usize) void {
+    fn getPawnMoves(self: *Game, row: usize, col: usize, buffer: []Move, count: *usize) void {
         const isWhite = self.turn == .White;
         const row_offset: i8 = if (isWhite) -1 else 1;
         var r: i8 = @intCast(row);
@@ -385,12 +345,12 @@ pub const Game = struct {
         // Normal
         if (self.board[@intCast(r)][@intCast(c)] == null) {
             if (r == promotion_row) {
-                self.addPromotionMoves(row, col, @intCast(r), @intCast(c), false, null);
+                self.addPromotionMoves(row, col, @intCast(r), @intCast(c), null, buffer, count);
             } else {
-                self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal, .piece = .Pawn });
+                self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal, .piece = .Pawn }, buffer, count);
                 // Double Push
                 if (row == start_row and self.board[@intCast(r + row_offset)][@intCast(c)] == null) {
-                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r + row_offset), @intCast(c) }, .piece = .Pawn, .move_type = .DoublePawnPush });
+                    self.addMove(Move{ .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r + row_offset), @intCast(c) }, .piece = .Pawn, .move_type = .DoublePawnPush }, buffer, count);
                 }
             }
         }
@@ -403,32 +363,30 @@ pub const Game = struct {
                 if (self.board[@intCast(r)][@intCast(cc)]) |target| {
                     if (target.color != self.turn) {
                         if (r == promotion_row) {
-                            self.addPromotionMoves(row, col, @intCast(r), @intCast(cc), true, target.type);
+                            self.addPromotionMoves(row, col, @intCast(r), @intCast(cc), target.type, buffer, count);
                         } else {
-                            self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .Capture, .captured_piece = target.type });
+                            self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .Capture, .captured_piece = target.type }, buffer, count);
                         }
                     }
                 }
                 // En Passant
                 if (self.en_passant_pos) |ep| {
                     if (ep[0] == r and ep[1] == cc) {
-                        self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .EnPassant });
+                        self.addMove(Move{ .piece = .Pawn, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(cc) }, .move_type = .EnPassant }, buffer, count);
                     }
                 }
             }
         }
     }
 
-    fn addPromotionMoves(self: *Game, fr: usize, fc: usize, tr: u8, tc: u8, is_cap: bool, captured_piece: ?PieceType) void {
-        const mtype: MoveType = if (is_cap) .Capture else .Promotion; // Actually simplified logic uses .Promotion type with piece set
+    fn addPromotionMoves(self: *Game, fr: usize, fc: usize, tr: u8, tc: u8, captured_piece: ?PieceType, buffer: []Move, count: *usize) void {
         const pieces = [_]PieceType{ .Queen, .Knight, .Rook, .Bishop };
         for (pieces) |p| {
-            self.addMove(Move{ .from = .{ @intCast(fr), @intCast(fc) }, .to = .{ tr, tc }, .piece = .Pawn, .move_type = .Promotion, .promotion_piece = p, .captured_piece = captured_piece });
+            self.addMove(Move{ .from = .{ @intCast(fr), @intCast(fc) }, .to = .{ tr, tc }, .piece = .Pawn, .move_type = .Promotion, .promotion_piece = p, .captured_piece = captured_piece }, buffer, count);
         }
-        _ = mtype;
     }
 
-    fn genKnightMoves(self: *Game, row: usize, col: usize) void {
+    fn genKnightMoves(self: *Game, row: usize, col: usize, buffer: []Move, count: *usize) void {
         for (knight_dirs) |dir| {
             const r = @as(i8, @intCast(row)) + dir.row;
             const c = @as(i8, @intCast(col)) + dir.col;
@@ -436,16 +394,16 @@ pub const Game = struct {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target) |nonull_target| {
                     if (nonull_target.color != self.turn) {
-                        self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = nonull_target.type });
+                        self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = nonull_target.type }, buffer, count);
                     }
                 } else {
-                    self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                    self.addMove(Move{ .piece = .Knight, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal }, buffer, count);
                 }
             }
         }
     }
 
-    fn getKingMoves(self: *Game, row: usize, col: usize) void {
+    fn getKingMoves(self: *Game, row: usize, col: usize, buffer: []Move, count: *usize) void {
         for (king_dirs) |dir| {
             const r = @as(i8, @intCast(row)) + dir.row;
             const c = @as(i8, @intCast(col)) + dir.col;
@@ -453,10 +411,10 @@ pub const Game = struct {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target) |nonull_target| {
                     if (nonull_target.color != self.turn) {
-                        self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = nonull_target.type });
+                        self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = nonull_target.type }, buffer, count);
                     }
                 } else {
-                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal }, buffer, count);
                 }
             }
         }
@@ -465,29 +423,29 @@ pub const Game = struct {
         if (self.turn == .White) {
             if (self.castlingRights.white_king_side and self.board[7][5] == null and self.board[7][6] == null) {
                 if (!self.isSquareAttacked(.{ 7, 4 }, .Black) and !self.isSquareAttacked(.{ 7, 5 }, .Black) and !self.isSquareAttacked(.{ 7, 6 }, .Black)) {
-                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 6 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 6 }, .move_type = .Castling }, buffer, count);
                 }
             }
             if (self.castlingRights.white_queen_side and self.board[7][1] == null and self.board[7][2] == null and self.board[7][3] == null) {
                 if (!self.isSquareAttacked(.{ 7, 4 }, .Black) and !self.isSquareAttacked(.{ 7, 3 }, .Black) and !self.isSquareAttacked(.{ 7, 2 }, .Black)) {
-                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 2 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 7, 2 }, .move_type = .Castling }, buffer, count);
                 }
             }
         } else {
             if (self.castlingRights.black_king_side and self.board[0][5] == null and self.board[0][6] == null) {
                 if (!self.isSquareAttacked(.{ 0, 4 }, .White) and !self.isSquareAttacked(.{ 0, 5 }, .White) and !self.isSquareAttacked(.{ 0, 6 }, .White)) {
-                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 6 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 6 }, .move_type = .Castling }, buffer, count);
                 }
             }
             if (self.castlingRights.black_queen_side and self.board[0][1] == null and self.board[0][2] == null and self.board[0][3] == null) {
                 if (!self.isSquareAttacked(.{ 0, 4 }, .White) and !self.isSquareAttacked(.{ 0, 3 }, .White) and !self.isSquareAttacked(.{ 0, 2 }, .White)) {
-                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 2 }, .move_type = .Castling });
+                    self.addMove(Move{ .piece = .King, .from = .{ @intCast(row), @intCast(col) }, .to = .{ 0, 2 }, .move_type = .Castling }, buffer, count);
                 }
             }
         }
     }
 
-    fn genSliderMoves(self: *Game, row: usize, col: usize, dirs: []const Vec2, piece_type: PieceType) void {
+    fn genSliderMoves(self: *Game, row: usize, col: usize, dirs: []const Vec2, piece_type: PieceType, buffer: []Move, count: *usize) void {
         for (dirs) |dir| {
             var r = @as(i8, @intCast(row));
             var c = @as(i8, @intCast(col));
@@ -499,11 +457,11 @@ pub const Game = struct {
                 const target = self.board[@intCast(r)][@intCast(c)];
                 if (target) |piece| {
                     if (piece.color != self.turn) {
-                        self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = piece.type });
+                        self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Capture, .captured_piece = piece.type }, buffer, count);
                     }
                     break;
                 }
-                self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal });
+                self.addMove(Move{ .piece = piece_type, .from = .{ @intCast(row), @intCast(col) }, .to = .{ @intCast(r), @intCast(c) }, .move_type = .Normal }, buffer, count);
             }
         }
     }
@@ -589,16 +547,16 @@ pub const Game = struct {
         const beta: i32 = 500000;
         var searchContext = evaluations.SearchContext.init();
 
-        var root_moves: [256]Move = undefined;
-        @memcpy(root_moves[0..self.move_count], self.moves[0..self.move_count]);
-        const count = self.move_count;
+        var root_moves: [218]Move = undefined;
+        const count = self.generateLegalMoves(&root_moves);
+
         for (root_moves[0..count]) |move| {
             try self.applyMove(move);
-            try self.switchTurn();
+            self.switchTurn();
 
             const score: i32 = -try evaluations.negamax(self, &searchContext, 4, 1, -beta, -alpha);
 
-            try self.switchTurn();
+            self.switchTurn();
             self.undoMove(move);
 
             if (score > best_score) {

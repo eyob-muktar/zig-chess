@@ -116,14 +116,14 @@ pub const SearchContext = struct {
 };
 
 pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, alpha: i32, beta: i32) !i32 {
-    var alpha_param = alpha;
+    var alpha_mutable = alpha;
     if (depth == 0) {
         const multiplier: i32 = if (game.turn == .White) 1 else -1;
         return game.evaluate() * multiplier;
     }
 
-    try game.generateLegalMoves();
-    const count = game.move_count;
+    var moves: [218]types.Move = undefined;
+    const count = game.generateLegalMoves(&moves);
 
     if (count == 0) {
         if (game.isInCheck()) {
@@ -133,11 +133,7 @@ pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, 
         }
     }
 
-    // Copy to local stack (to avoid recursion corruption)
-    var moves: [218]types.Move = undefined;
-    @memcpy(moves[0..count], game.moves[0..count]);
-
-    var scores: [256]i32 = undefined;
+    var scores: [218]i32 = undefined;
     for (moves[0..count], 0..count) |move, i| {
         scores[i] = scoreMove(context, move, ply);
     }
@@ -161,11 +157,11 @@ pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, 
         scores[best_idx] = temp_s;
 
         try game.applyMove(moves[i]);
-        try game.switchTurn();
+        game.switchTurn();
 
-        const score = -try negamax(game, context, depth - 1, ply + 1, -beta, -alpha_param);
+        const score = -try negamax(game, context, depth - 1, ply + 1, -beta, -alpha_mutable);
 
-        try game.switchTurn();
+        game.switchTurn();
         game.undoMove(moves[i]);
 
         if (score >= beta) {
@@ -174,10 +170,10 @@ pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, 
             }
             return beta;
         }
-        if (score > alpha_param) alpha_param = score;
+        if (score > alpha_mutable) alpha_mutable = score;
     }
 
-    return alpha_param;
+    return alpha_mutable;
 }
 
 pub fn scoreMove(context: *SearchContext, move: types.Move, ply: usize) i32 {
