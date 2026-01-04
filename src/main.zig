@@ -25,8 +25,8 @@ const UIInteractionState = enum {
     dragging_piece,
     promoting,
 };
-const START_FEN = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1";
-// "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+// "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1";
 
 const UI = struct {
     game: engine.Game,
@@ -52,7 +52,7 @@ const UI = struct {
             .textures = std.AutoHashMap(types.Piece, rl.Texture2D).init(allocator),
             .font = try rl.loadFontEx("assets/jetbrains-mono-v18-latin-regular.ttf", 48, null),
             .white_player = .Human,
-            .black_player = .Human,
+            .black_player = .Computer,
         };
     }
 
@@ -485,7 +485,7 @@ pub fn main() !void {
 
     var moves: [218]types.Move = undefined;
     var moves_count: usize = 0;
-    moves_count = ui.game.generateLegalMoves(&moves);
+    moves_count = ui.game.generateLegalMoves(&moves, .All);
 
     while (!rl.windowShouldClose()) {
         const player_action = try ui.update(moves[0..moves_count]);
@@ -497,7 +497,7 @@ pub fn main() !void {
 
                 ui.updateHistoryScroll();
 
-                moves_count = ui.game.generateLegalMoves(&moves);
+                moves_count = ui.game.generateLegalMoves(&moves, .All);
                 ui.game.updateStatus(moves_count);
             },
             .reset_game => {
@@ -506,11 +506,10 @@ pub fn main() !void {
                 ui.history_scroll = 0;
                 try ui.game.loadFen(START_FEN);
 
-                moves_count = ui.game.generateLegalMoves(&moves);
+                moves_count = ui.game.generateLegalMoves(&moves, .All);
             },
             .none => {},
         }
-        std.debug.print("\n {d}", .{moves_count});
 
         rl.beginDrawing();
         defer rl.endDrawing();

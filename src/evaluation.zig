@@ -117,13 +117,10 @@ pub const SearchContext = struct {
 
 pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, alpha: i32, beta: i32) !i32 {
     var alpha_mutable = alpha;
-    if (depth == 0) {
-        const multiplier: i32 = if (game.turn == .White) 1 else -1;
-        return game.evaluate() * multiplier;
-    }
+    if (depth == 0) return try quiescenceSearch(game, alpha, beta);
 
     var moves: [218]types.Move = undefined;
-    const count = game.generateLegalMoves(&moves);
+    const count = game.generateLegalMoves(&moves, .All);
 
     if (count == 0) {
         if (game.isInCheck()) {
@@ -139,7 +136,7 @@ pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, 
     }
 
     for (0..count) |i| {
-        // Find the highest score from the REMAINING moves
+        // find the highest score from the reamaining moves
         var best_idx = i;
         for (i + 1..count) |j| {
             if (scores[j] > scores[best_idx]) {
@@ -147,7 +144,7 @@ pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, 
             }
         }
 
-        // Swap the best remaining move to the current position
+        // swap the best remaining move to the current position
         const temp_m = moves[i];
         moves[i] = moves[best_idx];
         moves[best_idx] = temp_m;
@@ -195,6 +192,73 @@ pub fn scoreMove(context: *SearchContext, move: types.Move, ply: usize) i32 {
     }
 
     return 0;
+}
+
+fn sortCaptures(moves: []types.Move) void {
+    for (0..moves.len) |i| {
+        var best_idx = i;
+        var best_score: i32 = -1;
+
+        for (i..moves.len) |j| {
+            const move = moves[j];
+            const victim_value = if (move.captured_piece) |piece| getPieceValue(piece) else getPieceValue(.Pawn);
+            const attacker_value = getPieceValue(move.piece);
+
+            const score = (victim_value * 10) - attacker_value;
+
+            if (score > best_score) {
+                best_score = score;
+                best_idx = j;
+            }
+        }
+
+        // swap best move to front
+        const temp = moves[i];
+        moves[i] = moves[best_idx];
+        moves[best_idx] = temp;
+    }
+}
+
+fn quiescenceSearch(game: *engine.Game, alpha: i32, beta: i32) !i32 {
+    var alpha_mutable = alpha;
+    const static_eval: i32 = game.evaluate();
+
+    if (static_eval >= beta) return beta;
+    if (static_eval > alpha_mutable) alpha_mutable = static_eval;
+
+    var captures: [64]types.Move = undefined;
+    const count = game.generateLegalMoves(&captures, .CapturesOnly);
+
+    sortCaptures(captures[0..count]);
+
+    for (captures[0..count]) |move| {
+        try game.applyMove(move);
+        game.switchTurn();
+
+        const score = -try quiescenceSearch(game, -beta, -alpha_mutable);
+
+        game.switchTurn();
+        game.undoMove(move);
+
+        if (score >= beta) return beta;
+        if (score > alpha_mutable) alpha_mutable = score;
+    }
+
+    return alpha_mutable;
+}
+
+pub fn getPstValue(piece: types.Piece, row: u8, col: u8) i32 {
+    const pst_row = if (piece.color == .Black) 7 - row else row;
+    const value = switch (piece.type) {
+        .Pawn => PAWN_PST[pst_row][col],
+        .Knight => KNIGHT_PST[pst_row][col],
+        .Bishop => BISHOP_PST[pst_row][col],
+        .Rook => ROOK_PST[pst_row][col],
+        .Queen => QUEEN_PST[pst_row][col],
+        .King => KING_MIDDLE_GAME_PST[pst_row][col],
+    };
+
+    return value;
 }
 
 pub fn getPieceValue(piece: types.PieceType) i32 {

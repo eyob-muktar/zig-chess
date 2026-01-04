@@ -66,7 +66,7 @@ test "Pawn Movement (Single, Double, Capture)" {
 
     game.turn = .White;
     var moves: [218]types.Move = undefined;
-    const count = game.generateLegalMoves(&moves);
+    const count = game.generateLegalMoves(&moves, .All);
 
     var found_single = false;
     var found_double = false;
@@ -127,7 +127,7 @@ test "Check Detection and Illegal Moves" {
 
     game.turn = .White;
     var moves: [218]types.Move = undefined;
-    const count = game.generateLegalMoves(&moves);
+    const count = game.generateLegalMoves(&moves, .All);
 
     // King moves:
     // D1 (7,3) - Safe
@@ -157,7 +157,7 @@ test "Castling Rights" {
     try expect(game.castlingRights.white_king_side == true);
 
     var moves: [218]types.Move = undefined;
-    const count = game.generateLegalMoves(&moves);
+    const count = game.generateLegalMoves(&moves, .All);
 
     var can_castle = false;
     for (moves[0..count]) |m| {
@@ -192,7 +192,7 @@ fn perft(game: *engine.Game, depth: u32) !PerftResults {
     var total_results = PerftResults{};
 
     var moves: [218]types.Move = undefined;
-    const count = game.generateLegalMoves(&moves);
+    const count = game.generateLegalMoves(&moves, .All);
 
     for (moves[0..count]) |move| {
         const is_capture = move.move_type == .Capture or move.move_type == .EnPassant;
@@ -236,7 +236,7 @@ pub fn perftDivide(game: *engine.Game, depth: u32) !void {
     var total_nodes: u64 = 0;
 
     var moves: [218]types.Move = undefined;
-    const count = game.generateLegalMoves(&moves);
+    const count = game.generateLegalMoves(&moves, .All);
 
     std.debug.print("\n--- Perft Divide Depth {d} ---\n", .{depth});
 
@@ -291,6 +291,7 @@ test "Chess Move Generation - Initial Position" {
     const result2 = try perft(&game, 2);
     const result3 = try perft(&game, 3);
     const result4 = try perft(&game, 4);
+    // const result5 = try perft(&game, 5);
 
     // try expectEqual(14, result1.nodes);
     // try expect(result2.nodes == 191);
@@ -301,4 +302,5 @@ test "Chess Move Generation - Initial Position" {
     std.debug.print("Depth 2: {d}--{d} -- {d} -- {d} -- {d}\n", .{ result2.nodes, result2.captures, result2.en_passants, result2.castles, result2.promotions });
     std.debug.print("Depth 3: {d}--{d} -- {d} -- {d} -- {d}\n", .{ result3.nodes, result3.captures, result3.en_passants, result3.castles, result3.promotions });
     std.debug.print("Depth 4: {d}--{d} -- {d} -- {d} -- {d}\n", .{ result4.nodes, result4.captures, result4.en_passants, result4.castles, result4.promotions });
+    // std.debug.print("Depth 4: {d}--{d} -- {d} -- {d} -- {d}\n", .{ result5.nodes, result5.captures, result5.en_passants, result5.castles, result5.promotions });
 }
