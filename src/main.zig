@@ -20,6 +20,8 @@ pub const PlayerAction = union(enum) {
     reset_game,
 };
 
+pub const Screen = enum { Menu, Game };
+
 const UIInteractionState = enum {
     idle,
     dragging_piece,
@@ -31,6 +33,7 @@ const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 const UI = struct {
     game: engine.Game,
     state: UIInteractionState,
+    current_screen: Screen = .Menu,
 
     selected_sq: ?[2]u8,
     pending_from: ?[2]u8,
@@ -329,6 +332,79 @@ const UI = struct {
         }
     }
 
+    pub fn drawSetupMenu(self: *UI) void {
+        rl.clearBackground(rl.Color.init(50, 50, 50, 255));
+        const title = "CHESSIO";
+        const subtitle = "Select game mode to begin";
+        const btn1_txt = "Player vs Player";
+        const btn2_txt = "Player vs Computer";
+        const btn3_txt = "Exit Game";
+
+        const menu_rect = rl.Rectangle{ .x = 400, .y = 100, .width = 480, .height = 600 };
+        rl.drawRectangleRoundedLines(menu_rect, 0.1, 1, rl.Color.yellow);
+        rl.drawRectangleRounded(menu_rect, 0.1, 1, rl.fade(rl.Color.init(15, 23, 42, 255), 1));
+
+        const title_size = rl.measureTextEx(self.font, title, 48, 1);
+        const subtitle_size = rl.measureTextEx(self.font, subtitle, 24, 1);
+        const title_pos_x = menu_rect.x + ((menu_rect.width - title_size.x) / 2);
+        const subtitle_pos_x = menu_rect.x + ((menu_rect.width - subtitle_size.x) / 2);
+
+        rl.drawTextEx(self.font, title, rl.Vector2.init(title_pos_x, menu_rect.y + 30), 48, 1, rl.Color.white);
+        rl.drawTextEx(self.font, subtitle, rl.Vector2.init(subtitle_pos_x, menu_rect.y + title_size.y + 30), 24, 0, rl.Color.light_gray);
+
+        // Buttons
+        const button1_rect = rl.Rectangle{ .x = menu_rect.x + 40, .y = menu_rect.y + 200, .width = menu_rect.width - 80, .height = 75 };
+        const button2_rect = rl.Rectangle{ .x = menu_rect.x + 40, .y = menu_rect.y + 300, .width = menu_rect.width - 80, .height = 75 };
+        const button3_rect = rl.Rectangle{ .x = menu_rect.x + 40, .y = menu_rect.y + 400, .width = menu_rect.width - 80, .height = 75 };
+        // rl.drawRectangleRoundedLines(button_rect, 0.1, 1, rl.Color.yellow);
+        rl.drawRectangleRounded(button1_rect, 0.1, 1, rl.fade(rl.Color.init(18, 66, 171, 255), 1));
+        rl.drawRectangleRounded(button2_rect, 0.1, 1, rl.fade(rl.Color.init(147, 51, 234, 255), 1));
+        rl.drawRectangleRounded(button3_rect, 0.1, 1, rl.fade(rl.Color.init(51, 65, 85, 255), 1));
+
+        const button1_size = rl.measureTextEx(self.font, btn1_txt, 28, 1);
+        const button2_size = rl.measureTextEx(self.font, btn2_txt, 28, 1);
+        const button3_size = rl.measureTextEx(self.font, btn3_txt, 28, 1);
+
+        const button1_pos_x = button1_rect.x + ((button1_rect.width - button1_size.x) / 2);
+        const button2_pos_x = button2_rect.x + ((button2_rect.width - button2_size.x) / 2);
+        const button3_pos_x = button3_rect.x + ((button3_rect.width - button3_size.x) / 2);
+
+        rl.drawTextEx(self.font, btn1_txt, rl.Vector2.init(button1_pos_x, button1_rect.y + 25), 28, 1, rl.Color.white);
+        rl.drawTextEx(self.font, btn2_txt, rl.Vector2.init(button2_pos_x, button2_rect.y + 25), 28, 1, rl.Color.white);
+        rl.drawTextEx(self.font, btn3_txt, rl.Vector2.init(button3_pos_x, button3_rect.y + 25), 28, 1, rl.Color.white);
+
+        // scale up when hover
+        if (rl.checkCollisionPointRec(rl.getMousePosition(), button1_rect)) {
+            rl.drawRectangleRoundedLines(button1_rect, 0.1, 1, rl.Color.yellow);
+        }
+        if (rl.checkCollisionPointRec(rl.getMousePosition(), button2_rect)) {
+            rl.drawRectangleRoundedLines(button2_rect, 0.1, 1, rl.Color.yellow);
+        }
+        if (rl.checkCollisionPointRec(rl.getMousePosition(), button3_rect)) {
+            rl.drawRectangleRoundedLines(button3_rect, 0.1, 1, rl.Color.yellow);
+        }
+
+        // click events
+        if (rl.isMouseButtonPressed(rl.MouseButton.left)) {
+            // player vs player
+            if (rl.checkCollisionPointRec(rl.getMousePosition(), button1_rect)) {
+                self.white_player = .Human;
+                self.black_player = .Human;
+                self.current_screen = .Game;
+            }
+            // player vs computer
+            if (rl.checkCollisionPointRec(rl.getMousePosition(), button2_rect)) {
+                self.white_player = .Human;
+                self.black_player = .Computer;
+                self.current_screen = .Game;
+            }
+            // exit game
+            if (rl.checkCollisionPointRec(rl.getMousePosition(), button3_rect)) {
+                std.process.exit(0);
+            }
+        }
+    }
+
     pub fn loadTextureFromImage(path: [:0]const u8) !rl.Texture2D {
         const image = try rl.loadImage(path);
         const texture = try rl.loadTextureFromImage(image);
@@ -488,32 +564,36 @@ pub fn main() !void {
     moves_count = ui.game.generateLegalMoves(&moves, .All);
 
     while (!rl.windowShouldClose()) {
-        const player_action = try ui.update(moves[0..moves_count]);
-        switch (player_action) {
-            .make_move => |move| {
-                try ui.game.applyMove(move);
-                ui.game.switchTurn();
-                ui.uiReset();
-
-                ui.updateHistoryScroll();
-
-                moves_count = ui.game.generateLegalMoves(&moves, .All);
-                ui.game.updateStatus(moves_count);
-            },
-            .reset_game => {
-                ui.game.reset();
-                ui.uiReset();
-                ui.history_scroll = 0;
-                try ui.game.loadFen(START_FEN);
-
-                moves_count = ui.game.generateLegalMoves(&moves, .All);
-            },
-            .none => {},
-        }
-
         rl.beginDrawing();
         defer rl.endDrawing();
-        rl.clearBackground(rl.Color.dark_gray);
-        ui.draw(moves[0..moves_count]);
+        switch (ui.current_screen) {
+            .Menu => ui.drawSetupMenu(),
+            .Game => {
+                const player_action = try ui.update(moves[0..moves_count]);
+                switch (player_action) {
+                    .make_move => |move| {
+                        try ui.game.applyMove(move);
+                        ui.uiReset();
+
+                        ui.game.switchTurn();
+                        ui.updateHistoryScroll();
+                        moves_count = ui.game.generateLegalMoves(&moves, .All);
+                        ui.game.updateStatus(moves_count);
+                    },
+                    .reset_game => {
+                        ui.game.reset();
+                        ui.uiReset();
+                        ui.history_scroll = 0;
+                        try ui.game.loadFen(START_FEN);
+
+                        moves_count = ui.game.generateLegalMoves(&moves, .All);
+                    },
+                    .none => {},
+                }
+
+                rl.clearBackground(rl.Color.dark_gray);
+                ui.draw(moves[0..moves_count]);
+            },
+        }
     }
 }
