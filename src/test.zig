@@ -100,7 +100,7 @@ test "Apply and Undo Move" {
         .piece = .Pawn,
     };
 
-    try game.applyMove(move);
+    try game.applyMove(move, false);
 
     // Verify Board State Changed
     try expect(game.board[1][4] == null);
@@ -109,7 +109,7 @@ test "Apply and Undo Move" {
     try expect(game.en_passant_pos != null); // Should set EP target
 
     // Undo
-    game.undoMove(move);
+    game.undoMove(move, false);
 
     // Verify Board State Restored
     try expect(game.board[1][4] != null);
@@ -200,7 +200,7 @@ fn perft(game: *engine.Game, depth: u32) !PerftResults {
         const is_castle = move.move_type == .Castling;
         const is_promo = move.move_type == .Promotion;
 
-        try game.applyMove(move);
+        try game.applyMove(move, false);
         game.switchTurn();
         // if (history.captured_piece != null) {
         //     // std.debug.print("Move: {any}\n", .{nonull_history_captured_piece});
@@ -221,7 +221,7 @@ fn perft(game: *engine.Game, depth: u32) !PerftResults {
         }
 
         game.switchTurn();
-        game.undoMove(move);
+        game.undoMove(move, false);
     }
 
     return total_results;
@@ -241,7 +241,7 @@ pub fn perftDivide(game: *engine.Game, depth: u32) !void {
     std.debug.print("\n--- Perft Divide Depth {d} ---\n", .{depth});
 
     for (moves[0..count]) |move| {
-        try game.applyMove(move);
+        try game.applyMove(move, false);
         game.switchTurn();
 
         const nodes_from_move = try perft(game, depth - 1);
@@ -252,7 +252,7 @@ pub fn perftDivide(game: *engine.Game, depth: u32) !void {
         std.debug.print(": {d}\n", .{nodes_from_move.nodes});
 
         game.switchTurn();
-        game.undoMove(move);
+        game.undoMove(move, false);
     }
 
     std.debug.print("---------------------------\n", .{});

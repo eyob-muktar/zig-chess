@@ -40,6 +40,12 @@ pub const Game = struct {
     white_king_pos: [2]u8,
     black_king_pos: [2]u8,
 
+    captured_white_pieces: [15]PieceType = undefined,
+    captured_white_count: usize = 0,
+
+    captured_black_pieces: [15]PieceType = undefined,
+    captured_black_count: usize = 0,
+
     allocator: std.mem.Allocator,
     history: std.ArrayList(HistoryEntry),
 
@@ -155,6 +161,8 @@ pub const Game = struct {
         self.castlingRights = CastlingRights{ .white_king_side = true, .white_queen_side = true, .black_king_side = true, .black_queen_side = true };
         self.en_passant_pos = null;
         self.history.clearRetainingCapacity();
+        self.captured_black_count = 0;
+        self.captured_white_count = 0;
     }
 
     pub fn switchTurn(self: *Game) void {
@@ -165,7 +173,7 @@ pub const Game = struct {
         return if (self.turn == .White) .Black else .White;
     }
 
-    pub fn applyMove(self: *Game, move: Move) !void {
+    pub fn applyMove(self: *Game, move: Move, record_capture: bool) !void {
         const score_multiplier: i32 = if (self.turn == .White) 1 else -1;
         const piece = self.board[move.from[0]][move.from[1]];
         var captured: ?Piece = null;
@@ -227,11 +235,23 @@ pub const Game = struct {
             self.en_passant_pos = null;
         }
 
+        if (record_capture) {
+            if (captured) |p| {
+                if (self.turn == .White) {
+                    self.captured_black_pieces[self.captured_black_count] = p.type;
+                    self.captured_black_count += 1;
+                } else {
+                    self.captured_white_pieces[self.captured_white_count] = p.type;
+                    self.captured_white_count += 1;
+                }
+            }
+        }
+
         self.updateCastlingRights(move);
         try self.history.append(self.allocator, entry);
     }
 
-    pub fn undoMove(self: *Game, move: Move) void {
+    pub fn undoMove(self: *Game, move: Move, record_capture: bool) void {
         const score_multiplier: i32 = if (self.turn == .White) 1 else -1;
         const entry = self.history.pop();
 
@@ -265,6 +285,14 @@ pub const Game = struct {
             } else if (move.to[1] == 2) { // Queen Side
                 self.board[row][0] = self.board[row][3];
                 self.board[row][3] = null;
+            }
+        }
+
+        if (record_capture and move.captured_piece != null) {
+            if (self.turn == .White) {
+                self.captured_black_count -= 1;
+            } else {
+                self.captured_white_count += 1;
             }
         }
 
@@ -332,9 +360,9 @@ pub const Game = struct {
     }
 
     fn isLegalMove(self: *Game, move: Move) !bool {
-        try self.applyMove(move);
+        try self.applyMove(move, false);
         const in_check = self.isInCheck();
-        self.undoMove(move);
+        self.undoMove(move, false);
 
         if (in_check) return false;
         return true;
@@ -573,13 +601,13 @@ pub const Game = struct {
         const count = self.generateLegalMoves(&root_moves, .All);
 
         for (root_moves[0..count]) |move| {
-            try self.applyMove(move);
+            try self.applyMove(move, false);
             self.switchTurn();
 
             const score: i32 = -try evaluations.negamax(self, &searchContext, 4, 1, -beta, -alpha);
 
             self.switchTurn();
-            self.undoMove(move);
+            self.undoMove(move, false);
 
             if (score > best_score) {
                 best_score = score;

@@ -3,16 +3,19 @@ const rl = @import("raylib");
 const types = @import("types.zig");
 const engine = @import("engine.zig");
 
+const TITLE = "Chessio";
 const BLOCK_SIZE = 100;
 const BOARD_WIDTH = 800;
 const BOARD_HEIGHT = 800;
 const BOX_PADDING = 20;
+
 const HISTORY_PANEL_WIDTH = 400;
 const HISTORY_PANEL_HEIGHT = BOARD_HEIGHT - (BOX_PADDING * 2);
 const SCREEN_WIDTH = BOARD_WIDTH + HISTORY_PANEL_WIDTH + (BOX_PADDING * 2);
 const SCREEN_HEIGHT = BOARD_HEIGHT;
 const NOTATION_BOX_SIZE = 50;
-const LINE_HEIGHT = 40;
+const LINE_HEIGHT = 50;
+const MOVE_HISTORY_HEIGHT = 5 * LINE_HEIGHT;
 
 pub const PlayerAction = union(enum) {
     none,
@@ -53,7 +56,7 @@ const UI = struct {
             .pending_from = null,
             .pending_to = null,
             .textures = std.AutoHashMap(types.Piece, rl.Texture2D).init(allocator),
-            .font = try rl.loadFontEx("assets/jetbrains-mono-v18-latin-regular.ttf", 48, null),
+            .font = try rl.loadFontEx("assets/jetbrains-mono-v18-latin-regular.ttf", 24, null),
             .white_player = .Human,
             .black_player = .Computer,
         };
@@ -202,7 +205,7 @@ const UI = struct {
         const history = self.game.history.getLastOrNull();
         for (0..8) |r| {
             for (0..8) |c| {
-                const color = if ((r + c) % 2 == 1) rl.Color.init(10, 110, 15, 255) else rl.Color.init(217, 217, 217, 255);
+                const color = if ((r + c) % 2 == 1) rl.Color.init(146, 64, 14, 255) else rl.Color.init(254, 243, 199, 255);
                 const text_color = if ((r + c) % 2 == 0) rl.Color.init(10, 110, 15, 255) else rl.Color.init(217, 217, 217, 255);
                 // rl.drawRectangleRounded(rl.Rectangle.init(@floatFromInt(c * BLOCK_SIZE), @floatFromInt(r * BLOCK_SIZE), BLOCK_SIZE, BLOCK_SIZE), 0.1, 1, color);
                 rl.drawRectangle(@intCast(c * BLOCK_SIZE), @intCast(r * BLOCK_SIZE), BLOCK_SIZE, BLOCK_SIZE, color);
@@ -230,7 +233,7 @@ const UI = struct {
 
                         const dst_width: f32 = @floatFromInt(c * BLOCK_SIZE);
                         const dst_height: f32 = @floatFromInt(r * BLOCK_SIZE);
-                        rl.drawTexturePro(t, rl.Rectangle.init(0, 0, src_width, src_height), rl.Rectangle.init(dst_width, dst_height, BLOCK_SIZE, BLOCK_SIZE), rl.Vector2.init(0, 0), 0.0, rl.Color.white);
+                        rl.drawTexturePro(t, rl.Rectangle.init(0, 0, src_width, src_height), rl.Rectangle.init(dst_width + 10, dst_height + 5, BLOCK_SIZE - 20, BLOCK_SIZE - 20), rl.Vector2.init(0, 0), 0.0, rl.Color.white);
                     } else {
                         const txt = switch (p.type) {
                             .Pawn => "P",
@@ -423,14 +426,32 @@ const UI = struct {
 
     pub fn drawHistoryPanel(self: *UI) void {
         const history = self.game.history.items;
-
-        const text_padding = 50;
+        const text_padding = 40;
+        const y_padding = 60;
         const history_panel_rect = rl.Rectangle{ .x = SCREEN_WIDTH - HISTORY_PANEL_WIDTH - BOX_PADDING, .y = 0 + BOX_PADDING, .width = HISTORY_PANEL_WIDTH, .height = HISTORY_PANEL_HEIGHT };
-        rl.drawRectangleRec(history_panel_rect, rl.Color.init(30, 30, 30, 255));
+        const text_pos_x = history_panel_rect.x + text_padding;
+        const title_pos_y = history_panel_rect.y + 20;
+        const current_turn_box_pos_y = title_pos_y + y_padding;
+        const move_history_box_pos_y = current_turn_box_pos_y + y_padding;
+
+        rl.drawRectangleRec(history_panel_rect, rl.Color.init(30, 30, 60, 255));
+
+        rl.drawTextEx(self.font, TITLE, rl.Vector2.init(text_pos_x, title_pos_y), 36, 1, rl.Color.white);
+
+        // Current turn box
+        const text_size = rl.measureTextEx(self.font, "Current Turn ", 24, 1);
+        rl.drawTextEx(self.font, "Current Turn ", rl.Vector2.init(text_pos_x, current_turn_box_pos_y), 24, 1, rl.Color.light_gray);
+        if (self.game.turn == .White) {
+            rl.drawCircle(@intFromFloat(text_pos_x + text_size.x + 40), @intFromFloat(current_turn_box_pos_y + (text_size.y / 2)), 12, rl.Color.white);
+            rl.drawTextEx(self.font, "White", rl.Vector2.init(text_pos_x + text_size.x + 60, current_turn_box_pos_y), 24, 1, rl.Color.white);
+        } else {
+            rl.drawCircle(@intFromFloat(text_pos_x + text_size.x + 40), @intFromFloat(current_turn_box_pos_y + (text_size.y / 2)), 12, rl.Color.black);
+            rl.drawTextEx(self.font, "Black", rl.Vector2.init(text_pos_x + text_size.x + 60, current_turn_box_pos_y), 24, 1, rl.Color.white);
+        }
 
         // scroll handler
-        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * LINE_HEIGHT;
-        const scroll_offset = total_history_height - HISTORY_PANEL_HEIGHT + 40;
+        const total_history_height = @as(f32, @floatFromInt(history.len / 2)) * (LINE_HEIGHT + 10);
+        const scroll_offset = total_history_height - MOVE_HISTORY_HEIGHT;
         const mouse_wheel = rl.getMouseWheelMove();
         if (mouse_wheel != 0 and scroll_offset > 0) {
             const scrolled = self.history_scroll + (mouse_wheel * 20);
@@ -440,37 +461,78 @@ const UI = struct {
             }
         }
 
-        rl.beginScissorMode(@intFromFloat(history_panel_rect.x), 0, HISTORY_PANEL_WIDTH, HISTORY_PANEL_HEIGHT);
-        defer rl.endScissorMode();
-        var y_offset: f32 = 20 + self.history_scroll;
+        // Move History Box
+        rl.drawTextEx(self.font, "Move History ", rl.Vector2.init(text_pos_x, move_history_box_pos_y), 24, 1, rl.Color.white);
+        rl.beginScissorMode(@intFromFloat(history_panel_rect.x), move_history_box_pos_y + 40, HISTORY_PANEL_WIDTH, MOVE_HISTORY_HEIGHT);
+        var y_offset: f32 = move_history_box_pos_y + 40 + self.history_scroll + 10;
 
         for (history, 0..) |entry, i| {
             const col = i % 2;
             const fontSize = 24;
             const text = formatMoveNotation(entry.move);
 
-            const x_pos = if (col == 0) history_panel_rect.x + text_padding else history_panel_rect.x + (4 * text_padding);
+            const x_pos = if (col == 0) history_panel_rect.x + (2 * text_padding) else history_panel_rect.x + (5 * text_padding) + 20;
 
             if (col == 0) {
                 // draw move number
                 // since we're counting for each color (i = 0 and i = 1 are both move number 1 for white and black respectively)
+                // draw a rectangle for each move
+                const move_rect = rl.Rectangle.init(text_pos_x - 10, y_offset - 15, history_panel_rect.width - (2 * text_padding), LINE_HEIGHT);
+                rl.drawRectangleRounded(move_rect, 0.3, 1, rl.Color.init(15, 23, 42, 255));
+
                 const move_number = (i / 2) + 1;
                 const num_text = rl.textFormat("%d.", .{move_number});
 
-                rl.drawTextEx(self.font, num_text, rl.Vector2.init(history_panel_rect.x + 10, y_offset), fontSize, 1, rl.Color.gray);
+                rl.drawTextEx(self.font, num_text, rl.Vector2.init(text_pos_x, y_offset), fontSize, 1, rl.Color.gray);
             }
             rl.drawTextEx(self.font, &text, rl.Vector2.init(x_pos, y_offset), fontSize, 2, rl.Color.white);
 
             if (col != 0) {
-                y_offset += LINE_HEIGHT;
+                y_offset += LINE_HEIGHT + 10;
             }
+        }
+        rl.endScissorMode();
+
+        // Captured Pieces Box
+        const cp_box_y = MOVE_HISTORY_HEIGHT + move_history_box_pos_y + y_padding;
+        const cp_box_height = 80;
+        rl.drawTextEx(self.font, "Captured Pieces", rl.Vector2.init(text_pos_x, cp_box_y), 24, 1, rl.Color.white);
+        rl.drawTextEx(self.font, "white", rl.Vector2.init(text_pos_x, cp_box_y + 40), 20, 1, rl.Color.light_gray);
+        // const cp_rect = rl.Rectangle.init(text_pos_x, cp_box_y + 80, history_panel_rect.width - (2 * text_padding), cp_box_height);
+        // rl.drawRectangleRounded(cp_rect, 0.3, 1, rl.Color.init(42, 64, 117, 255));
+        // drwa the captured pieces for white
+        for (self.game.captured_black_pieces[0..self.game.captured_black_count], 0..) |p, i| {
+            const texture = self.textures.get(.{ .type = p, .color = .Black });
+            if (texture == null) continue;
+            const t = texture.?;
+            const src_width: f32 = @floatFromInt(t.width);
+            const src_height: f32 = @floatFromInt(t.height);
+            const piece_size = 40;
+            const dst_pos_x = text_pos_x + @as(f32, @floatFromInt(i * 40));
+            const dst_pos_y = cp_box_y + 100;
+            rl.drawTexturePro(t, rl.Rectangle.init(0, 0, src_width, src_height), rl.Rectangle.init(dst_pos_x, dst_pos_y, piece_size, piece_size), rl.Vector2.init(0, 0), 0.0, rl.Color.black);
+        }
+
+        rl.drawTextEx(self.font, "black", rl.Vector2.init(text_pos_x, cp_box_y + 40 + y_padding + cp_box_height), 20, 1, rl.Color.light_gray);
+        //draw the captured pieces for black
+        for (self.game.captured_white_pieces[0..self.game.captured_white_count], 0..) |p, i| {
+            const texture = self.textures.get(.{ .type = p, .color = .White });
+            if (texture == null) continue;
+            const t = texture.?;
+            const src_width: f32 = @floatFromInt(t.width);
+            const src_height: f32 = @floatFromInt(t.height);
+            const piece_size = 40;
+            const dst_pos_x = text_pos_x + @as(f32, @floatFromInt(i * 40));
+            const dst_pos_y = cp_box_y + cp_box_height + (2 * y_padding);
+            if (dst_pos_x > history_panel_rect.x + history_panel_rect.width - (2 * text_padding)) break;
+            rl.drawTexturePro(t, rl.Rectangle.init(0, 0, src_width, src_height), rl.Rectangle.init(dst_pos_x, dst_pos_y, piece_size, piece_size), rl.Vector2.init(0, 0), 0.0, rl.Color.white);
         }
     }
 
     pub fn updateHistoryScroll(self: *UI) void {
-        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * LINE_HEIGHT;
-        if (total_history_height > HISTORY_PANEL_HEIGHT - 40) {
-            self.history_scroll = -(total_history_height - (HISTORY_PANEL_HEIGHT - 60));
+        const total_history_height = @as(f32, @floatFromInt(self.game.history.items.len / 2)) * (LINE_HEIGHT + 10);
+        if (total_history_height > MOVE_HISTORY_HEIGHT) {
+            self.history_scroll = -(total_history_height - MOVE_HISTORY_HEIGHT);
         }
     }
 
@@ -551,7 +613,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    rl.initWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Zig Chess");
+    rl.initWindow(SCREEN_WIDTH, SCREEN_HEIGHT, TITLE);
     rl.setTargetFPS(60);
     defer rl.closeWindow();
 
@@ -572,7 +634,7 @@ pub fn main() !void {
                 const player_action = try ui.update(moves[0..moves_count]);
                 switch (player_action) {
                     .make_move => |move| {
-                        try ui.game.applyMove(move);
+                        try ui.game.applyMove(move, true);
                         ui.uiReset();
 
                         ui.game.switchTurn();
@@ -591,7 +653,7 @@ pub fn main() !void {
                     .none => {},
                 }
 
-                rl.clearBackground(rl.Color.dark_gray);
+                rl.clearBackground(rl.Color.init(15, 23, 42, 255));
                 ui.draw(moves[0..moves_count]);
             },
         }

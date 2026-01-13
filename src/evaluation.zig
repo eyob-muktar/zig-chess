@@ -153,13 +153,13 @@ pub fn negamax(game: *engine.Game, context: *SearchContext, depth: u8, ply: u8, 
         scores[i] = scores[best_idx];
         scores[best_idx] = temp_s;
 
-        try game.applyMove(moves[i]);
+        try game.applyMove(moves[i], false);
         game.switchTurn();
 
         const score = -try negamax(game, context, depth - 1, ply + 1, -beta, -alpha_mutable);
 
         game.switchTurn();
-        game.undoMove(moves[i]);
+        game.undoMove(moves[i], false);
 
         if (score >= beta) {
             if (moves[i].move_type != .Capture) {
@@ -232,13 +232,13 @@ fn quiescenceSearch(game: *engine.Game, alpha: i32, beta: i32) !i32 {
     sortCaptures(captures[0..count]);
 
     for (captures[0..count]) |move| {
-        try game.applyMove(move);
+        try game.applyMove(move, false);
         game.switchTurn();
 
         const score = -try quiescenceSearch(game, -beta, -alpha_mutable);
 
         game.switchTurn();
-        game.undoMove(move);
+        game.undoMove(move, false);
 
         if (score >= beta) return beta;
         if (score > alpha_mutable) alpha_mutable = score;
